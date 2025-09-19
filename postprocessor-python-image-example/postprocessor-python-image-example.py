@@ -54,9 +54,7 @@ def config():
         configuration = configparser.ConfigParser()
         configuration.read(CONFIG_FILE)
 
-        configured_log_level = configuration.get(
-            "common", "debug_level", fallback="INFO"
-        )
+        configured_log_level = configuration.get("common", "debug_level", fallback="INFO")
         set_log_level(configured_log_level)
 
         for section in configuration.sections():
@@ -115,10 +113,13 @@ def main():
 
         image_header = msgpack.unpackb(image_header)
         formatted_image_object = pformat(image_header)
-        logger.debug(f"Image header:\n\n{formatted_image_object}\n\n")
+        logger.info(f"Image header:\n\n{formatted_image_object}\n\n")
+
+        # Convert SHM Key to integer from string
+        shm_key = int(image_header["SHMKEY"])
 
         cumulative = parse_image_from_shm(
-            image_header["SHMKey"],
+            shm_key,
             image_header["Width"],
             image_header["Height"],
             image_header["Channels"],

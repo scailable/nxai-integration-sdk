@@ -238,11 +238,16 @@ uint64_t processInputTensor( const char *input_buffer, size_t message_length ) {
     mpack_tree_parse( &tree );
     mpack_node_t tensor_header_root = mpack_tree_root( &tree );
 
-    uint32_t shm_id = mpack_node_u32( mpack_node_map_cstr( tensor_header_root, "SHMID" ) );
+    // Get SHM key
+    char *shm_key_string = mpack_node_cstr_alloc( mpack_node_map_cstr( tensor_header_root, "SHMKEY" ), 1024 );
+    // Get SHM details
+    nxai_shm_t input_shm;
+    nxai_shm_key_from_string( &input_shm, shm_key_string );
+    nxai_shm_get_id( &input_shm );
 
     size_t tensor_size;
     char *tensor_data;
-    void *shared_data = nxai_shm_read( shm_id, &tensor_size, &tensor_data );
+    void *shared_data = nxai_shm_read( &input_shm, &tensor_size, &tensor_data );
 
     uint32_t height = mpack_node_u32( mpack_node_map_cstr( tensor_header_root, "Height" ) );
     uint32_t width = mpack_node_u32( mpack_node_map_cstr( tensor_header_root, "Width" ) );

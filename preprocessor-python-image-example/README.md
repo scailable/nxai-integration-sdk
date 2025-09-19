@@ -59,7 +59,7 @@ The header message sent to the external postprocessor contains information about
 
 ```json
 {
-    "SHMKey": <Key>,
+    "SHMKEY": <Key>,
     "SHMID": <ID>,
     "Width": <Width>,
     "Height": <Height>,

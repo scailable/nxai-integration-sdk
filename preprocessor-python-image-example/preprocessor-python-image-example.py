@@ -97,16 +97,19 @@ def main():
             logger.info("Got settings: " + str(image_header["ExternalProcessorSettings"]))
             external_settings = image_header["ExternalProcessorSettings"]
 
+        # Convert SHM Key to integer from string
+        shm_key = int(image_header["SHMKEY"])
+
         # Process image
         output_shm_id, width, height, channels = parseImageFromSHM(
-            image_header["SHMKey"],
+            shm_key,
             image_header["Width"],
             image_header["Height"],
             image_header["Channels"],
             external_settings,
         )
 
-        image_header["SHMID"] = output_shm_id
+        image_header["SHMID"] = str(output_shm_id)
         image_header["Width"] = width
         image_header["Height"] = height
         image_header["Channels"] = channels

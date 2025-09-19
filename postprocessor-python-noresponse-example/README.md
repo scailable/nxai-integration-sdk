@@ -59,8 +59,8 @@ The image header message contains fields indicating information about the image 
 {
     "Width": <Width>,
     "Height": <Height>,
-    "SHMKey": <SHM Key>,
-    "SHMID": <SHM ID>
+    "Channels": <Channels>,
+    "SHMKEY": <SHM Key>
 }
 ```
 

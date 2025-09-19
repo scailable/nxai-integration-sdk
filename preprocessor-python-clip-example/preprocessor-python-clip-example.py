@@ -120,7 +120,7 @@ def main():
             external_settings = tensor_header["ExternalProcessorSettings"]
 
         # Process image
-        output_shm_id = parseTensorFromSHM(tensor_header["SHMKey"], external_settings)
+        output_shm_id = parseTensorFromSHM(tensor_header["SHMKEY"], external_settings)
 
         if output_shm_id != 0:
             tensor_header["SHMID"] = output_shm_id

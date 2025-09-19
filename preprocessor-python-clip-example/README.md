@@ -29,7 +29,7 @@ The header message sent to the external postprocessor is MessagePack encoded and
 
 ```json
 {
-    "SHMKey": <Key>,
+    "SHMKEY": <Key>,
     "SHMID": <ID>,
 }
 ```

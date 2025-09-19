@@ -137,7 +137,7 @@ def main():
 
         image_header = msgpack.unpackb(image_header)
         image_array = parse_image_from_shm(
-            image_header["SHMKey"],
+            image_header["SHMKEY"],
             image_header["Width"],
             image_header["Height"],
             image_header["Channels"],
