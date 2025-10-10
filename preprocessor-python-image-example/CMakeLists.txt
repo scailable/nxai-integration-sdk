@@ -17,9 +17,23 @@ set(Python3_Executable "$ENV{VIRTUAL_ENV}/bin/python3")
 
 add_custom_target(${PROCESSOR_NAME} ALL
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    DEPENDS nxai-c-utilities-shared
     COMMAND ${PIP_PATH} install -r ../nxai-utilities/python-utilities/requirements.txt
     COMMAND ${PIP_PATH} install -r requirements.txt
-    COMMAND cp ${CMAKE_CURRENT_SOURCE_DIR}/../nxai-utilities/python-utilities/communication_utils.py ${CMAKE_CURRENT_SOURCE_DIR}
+    COMMAND cp ${CMAKE_CURRENT_SOURCE_DIR}/../nxai-utilities/python-utilities/nxai_communication_utils.py ${CMAKE_CURRENT_SOURCE_DIR}
     COMMAND ${Python3_Executable} -m nuitka ${CMAKE_CURRENT_SOURCE_DIR}/${PROCESSOR_NAME}.py --onefile --output-filename=${PROCESSOR_NAME} --output-dir=${CMAKE_CURRENT_BINARY_DIR}
-    COMMAND rm ${CMAKE_CURRENT_SOURCE_DIR}/communication_utils.py
+    COMMAND rm ${CMAKE_CURRENT_SOURCE_DIR}/nxai_communication_utils.py
+)
+
+# Add the installation rule for this program
+install(
+    PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/${PROCESSOR_NAME}
+    DESTINATION ${INSTALL_DEST_PREPROCESSORS}
+    COMPONENT ${PROCESSOR_NAME}
+)
+
+install(
+    TARGETS nxai-c-utilities-shared
+    DESTINATION ${INSTALL_DEST_PREPROCESSORS}
+    COMPONENT ${PROCESSOR_NAME}
 )

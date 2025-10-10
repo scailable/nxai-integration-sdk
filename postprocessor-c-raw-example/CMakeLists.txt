@@ -37,3 +37,8 @@ target_link_libraries(postprocessor-c-raw-example m dl rt)
 
 # Link utilities libraries
 target_link_libraries(postprocessor-c-raw-example nxai-c-utilities)
+
+# Add the installation rule for this specific target
+install(TARGETS postprocessor-c-example
+    DESTINATION ${INSTALL_DEST_POSTPROCESSORS}
+)
