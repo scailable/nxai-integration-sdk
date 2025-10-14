@@ -80,6 +80,12 @@ Set up CMake configuration:
 cmake ..
 ```
 
+Build a single processor:
+
+```
+cmake --build build --target <processor-name>
+```
+
 Build all targets:
 
 ```shell
@@ -97,6 +103,11 @@ Before installing make sure the target directory is writable.
 ```shell
 sudo chmod 777 /opt/networkoptix-metavms/mediaserver/bin/plugins/nxai_plugin/nxai_manager/postprocessors/
 sudo chmod 777 /opt/networkoptix-metavms/mediaserver/bin/plugins/nxai_plugin/nxai_manager/preprocessors/
+```
+
+To install a single processor to the default folder:
+```
+cmake --install build --component <processor-name>
 ```
 
 To install the generated pre/postprocessor examples to the default pre/postprocessors folder:
