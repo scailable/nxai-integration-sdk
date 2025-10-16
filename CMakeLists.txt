@@ -1,10 +1,23 @@
-cmake_minimum_required(VERSION 3.10.2)
+cmake_minimum_required(VERSION 3.31)
 
 project(nxai-integration-examples)
 
 # Define common installation destinations
-set(INSTALL_DEST_POSTPROCESSORS "/opt/networkoptix-metavms/mediaserver/bin/plugins/nxai_plugin/nxai_manager/postprocessors/")
-set(INSTALL_DEST_PREPROCESSORS "/opt/networkoptix-metavms/mediaserver/bin/plugins/nxai_plugin/nxai_manager/preprocessors/")
+if (WIN32)
+    set(INSTALL_DEST_POSTPROCESSORS "C:\\Program Files\\Network Optix\\Nx Meta\\MediaServer\\plugins\\nxai_plugin\\nxai_manager\\postprocessors")
+    set(INSTALL_DEST_PREPROCESSORS "C:\\Program Files\\Network Optix\\Nx Meta\\MediaServer\\plugins\\nxai_plugin\\nxai_manager\\preprocessors")
+else()
+    set(INSTALL_DEST_POSTPROCESSORS "/opt/networkoptix-metavms/mediaserver/bin/plugins/nxai_plugin/nxai_manager/postprocessors/")
+    set(INSTALL_DEST_PREPROCESSORS "/opt/networkoptix-metavms/mediaserver/bin/plugins/nxai_plugin/nxai_manager/preprocessors/")
+endif()
+
+# Check if the compiler is MSVC
+if(MSVC)
+    # Apply the flag specifically to the 'my_app' target
+    # PRIVATE: The option is only for building this target, not for consumers.
+    add_compile_options(/Zc:preprocessor)
+    link_libraries(ws2_32)
+endif()
 
 # Add Scailable C Utilities for all subprojects
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/nxai-utilities)
