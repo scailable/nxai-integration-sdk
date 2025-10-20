@@ -71,7 +71,7 @@ Create a configuration file at `/opt/networkoptix-metavms/mediaserver/bin/plugin
 {
     "externalPostprocessors": [
         {
-            "Name":"Example-Postprocessor",
+            "Name":"Example-C-Postprocessor",
             "Command":"/opt/networkoptix-metavms/mediaserver/bin/plugins/nxai_plugin/nxai_manager/postprocessors/postprocessor-c-example",
             "SocketPath":"/tmp/example-postprocessor.sock",
             "ReceiveInputTensor": false,

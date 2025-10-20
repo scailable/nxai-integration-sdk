@@ -21,11 +21,14 @@ else:
     LOG_FILE = os.path.join(script_location, "plugin.example.log")
 
 # Initialize plugin and logging, script makes use of INFO and DEBUG levels
+handler_stream = logging.StreamHandler(sys.stdout)
+handler_stream.setLevel(logging.DEBUG)
+handler_file = logging.FileHandler(filename=LOG_FILE,mode="w")
+handler_file.setLevel(logging.INFO)
+
 logging.basicConfig(
-    level=logging.INFO,
     format="%(asctime)s - %(levelname)s - example - %(message)s",
-    filename=LOG_FILE,
-    filemode="w",
+    handlers=[handler_stream,handler_file]
 )
 
 # The name of the postprocessor.

@@ -47,6 +47,9 @@ int main( int argc, char *argv[] ) {
         exit( 2 );
     }
 
+    // Initialize socket system
+    nxai_socket_initialize_sockets();
+
     // Set signal handler to listen for interrupt signals
     signal( SIGINT, handle_interrupt );
 
@@ -61,8 +64,14 @@ int main( int argc, char *argv[] ) {
     // Create a listener socket
     nxai_socket_t socket_fd = nxai_socket_create_listener( socket_path );
 
+    if (nxai_socket_is_valid(&socket_fd) == false) {
+        printf("EXAMPLE POSTPROCESSOR: Error! Could not create socket at path: %s\n",socket_path);
+        return 5;
+    }
+
     // Main loop: continues until an interrupt signal is received
     while ( interrupt_flag == false ) {
+        printf( "EXAMPLE POSTPROCESSOR: Waiting for message\n" );
         // Wait for a message on the socket
         nxai_socket_t connection_fd = nxai_socket_await_message( socket_fd, &allocated_buffer_size, &input_buffer, &message_length );
 
@@ -83,7 +92,7 @@ int main( int argc, char *argv[] ) {
 
         // Close the connection
         if ( nxai_close_socket( connection_fd ) == -1 ) {
-            fprintf( stderr, "EXAMPLE POSTPROCESSOR: Warning: Sender socket close error!\n" );
+            printf("EXAMPLE POSTPROCESSOR: Warning: Sender socket close error!\n" );
         }
     }
 
