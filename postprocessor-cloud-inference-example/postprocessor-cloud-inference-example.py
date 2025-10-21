@@ -44,6 +44,8 @@ Postprocessor_Socket_Path = "/tmp/python-cloud-inference-postprocessor.sock"
 
 global shared_memory
 shared_memory = None
+
+
 def parse_image_from_shm(shm_key: int, width: int, height: int, channels: int):
     global shared_memory
     try:
@@ -87,7 +89,7 @@ def config():
         image_path = configuration.get(
             "inference",
             "image_path",
-            fallback="/opt/networkoptix-metavms/mediaserver/bin/plugins/nxai_plugin/nxai_manager/postprocessors/face.png",
+            fallback="/opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/postprocessors/face.png",
         )
 
     except Exception as e:

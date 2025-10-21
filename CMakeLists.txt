@@ -4,11 +4,11 @@ project(nxai-integration-examples)
 
 # Define common installation destinations
 if (WIN32)
-    set(INSTALL_DEST_POSTPROCESSORS "C:\\Program Files\\Network Optix\\Nx Meta\\MediaServer\\plugins\\nxai_plugin\\nxai_manager\\postprocessors")
-    set(INSTALL_DEST_PREPROCESSORS "C:\\Program Files\\Network Optix\\Nx Meta\\MediaServer\\plugins\\nxai_plugin\\nxai_manager\\preprocessors")
+    set(INSTALL_DEST_POSTPROCESSORS "C:\\Program Files\\Network Optix\\Nx Meta\\MediaServer\\plugins\\nx_ai_manager_plugin\\nxai_manager\\postprocessors")
+    set(INSTALL_DEST_PREPROCESSORS "C:\\Program Files\\Network Optix\\Nx Meta\\MediaServer\\plugins\\nx_ai_manager_plugin\\nxai_manager\\preprocessors")
 else()
-    set(INSTALL_DEST_POSTPROCESSORS "/opt/networkoptix-metavms/mediaserver/bin/plugins/nxai_plugin/nxai_manager/postprocessors/")
-    set(INSTALL_DEST_PREPROCESSORS "/opt/networkoptix-metavms/mediaserver/bin/plugins/nxai_plugin/nxai_manager/preprocessors/")
+    set(INSTALL_DEST_POSTPROCESSORS "/opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/postprocessors/")
+    set(INSTALL_DEST_PREPROCESSORS "/opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/preprocessors/")
 endif()
 
 # Check if the compiler is MSVC

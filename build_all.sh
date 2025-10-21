@@ -9,5 +9,5 @@ cmake --build build --target install
 # Copy created binaries to local
 mkdir -p build/postprocessors
 mkdir -p build/preprocessors
-cp /opt/networkoptix-metavms/mediaserver/bin/plugins/nxai_plugin/nxai_manager/postprocessors/* build/postprocessors
-cp /opt/networkoptix-metavms/mediaserver/bin/plugins/nxai_plugin/nxai_manager/preprocessors/* build/preprocessors
+cp /opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/postprocessors/* build/postprocessors
+cp /opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/preprocessors/* build/preprocessors

@@ -11,8 +11,8 @@ RUN apt install -y python3-pip patchelf ccache libhdf5-dev tzdata cmake cargo &&
     rm -rf /var/lib/apt/lists/*
 
 # Create plugin directories
-RUN mkdir -p /opt/networkoptix-metavms/mediaserver/bin/plugins/nxai_plugin/nxai_manager/postprocessors/
-RUN mkdir -p /opt/networkoptix-metavms/mediaserver/bin/plugins/nxai_plugin/nxai_manager/preprocessors/
+RUN mkdir -p /opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/postprocessors/
+RUN mkdir -p /opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/preprocessors/
 
 # Build all the processors and copy them to build folder
 CMD bash /app/build_all.sh
