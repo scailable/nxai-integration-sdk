@@ -46,4 +46,5 @@ target_link_libraries(${PROCESSOR_NAME} nxai-c-utilities)
 # Add the installation rule for this specific target
 install(TARGETS ${PROCESSOR_NAME}
     DESTINATION ${INSTALL_DEST_POSTPROCESSORS}
+    COMPONENT ${PROCESSOR_NAME}
 )

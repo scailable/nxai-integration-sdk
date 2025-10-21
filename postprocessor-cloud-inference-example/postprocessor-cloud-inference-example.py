@@ -15,7 +15,7 @@ from aws_utils import classify_faces, create_session
 # Add the nxai-utilities python utilities
 script_location = os.path.dirname(sys.argv[0])
 sys.path.append(os.path.join(script_location, "../nxai-utilities/python-utilities"))
-import communication_utils
+import nxai_communication_utils
 
 CONFIG_FILE = os.path.join(script_location, "..", "etc", "plugin.cloud-inference.ini")
 
@@ -42,10 +42,14 @@ Postprocessor_Name = "Cloud-Inference-Postprocessor"
 # But it can be manually defined as well, as long as it is the same as the socket path in the runtime settings
 Postprocessor_Socket_Path = "/tmp/python-cloud-inference-postprocessor.sock"
 
-
+global shared_memory
+shared_memory = None
 def parse_image_from_shm(shm_key: int, width: int, height: int, channels: int):
+    global shared_memory
     try:
-        image_data = communication_utils.read_shm(shm_key)
+        if shared_memory is None:
+            shared_memory = nxai_communication_utils.SharedMemory(key=shm_key)
+        image_data = shared_memory.read()
         image_size = width * height * channels
         image_array = list(struct.unpack("B" * image_size, image_data))
         image_array = np.array(image_array).reshape((height, width, channels)).astype("uint8")
@@ -112,28 +116,28 @@ def main():
     global image_path
 
     # Start socket listener to receive messages from NXAI runtime
-    server = communication_utils.startUnixSocketServer(Postprocessor_Socket_Path)
+    server = nxai_communication_utils.SocketListener(Postprocessor_Socket_Path)
     # Wait for messages in a loop
     while True:
         # Wait for input message from runtime
         logger.debug("Waiting for input message")
 
         try:
-            input_message, connection = communication_utils.waitForSocketMessage(server)
-        except socket.timeout:
+            connection, input_message = server.accept()
+        except nxai_communication_utils.SocketTimeout:
             # Request timed out. Continue waiting
             continue
 
         # Since we're also expecting an image, receive the image header
         try:
-            image_header = communication_utils.receiveMessageOverConnection(connection)
-        except socket.timeout:
+            image_header = connection.receive()
+        except nxai_communication_utils.SocketTimeout:
             # Did not receive image header
             logger.debug("Did not receive image header. Are the settings correct?")
             continue
 
         # Parse input message
-        input_object = communication_utils.parseInferenceResults(input_message)
+        input_object = nxai_communication_utils.parseInferenceResults(input_message)
 
         image_header = msgpack.unpackb(image_header)
         image_array = parse_image_from_shm(
@@ -184,10 +188,11 @@ def main():
         logger.debug(f"Returning packed object:\n\n{formatted_packed_object}\n\n")
 
         # Write object back to string
-        output_message = communication_utils.writeInferenceResults(input_object)
+        output_message = nxai_communication_utils.writeInferenceResults(input_object)
 
         # Send message back to runtime
-        communication_utils.sendMessageOverConnection(connection, output_message)
+        connection.send(output_message)
+        connection.close()
 
 
 if __name__ == "__main__":

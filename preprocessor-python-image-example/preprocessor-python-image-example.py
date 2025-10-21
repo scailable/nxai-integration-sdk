@@ -10,7 +10,7 @@ import configparser
 # Add the nxai-utilities python utilities
 script_location = os.path.dirname(sys.argv[0])
 sys.path.append(os.path.join(script_location, "../nxai-utilities/python-utilities"))
-import communication_utils
+import nxai_communication_utils
 
 CONFIG_FILE = os.path.join(script_location, "..", "etc", "plugin.image.pre.ini")
 
@@ -34,20 +34,15 @@ logging.basicConfig(
 Preprocessor_Socket_Path = "/tmp/example-image-preprocessor.sock"
 
 # Define a single SHM object to share images back to AI Manager
-global output_shm
+global output_shm, input_shm
 output_shm = None
+input_shm = None
 
-
-def parseImageFromSHM(shm_key: int, width: int, height: int, channels: int, external_settings: dict):
-    global output_shm
-    if output_shm is None:
-        # Can reuse SHM ( if data is smaller or equal size ) or create new SHM and return ID
-        input_image_size = width * height * channels
-        output_shm = communication_utils.create_shm(input_image_size)
-        print("EXAMPLE PLUGIN Created shm ID: ", output_shm.id, "Size:", output_shm.size)
-
+def parseImageFromSHM(shm_key: str, width: int, height: int, channels: int, external_settings: dict):
     # Read image data from the shared memory
-    image_data = communication_utils.read_shm(shm_key)
+    if input_shm is None:
+        input_shm = nxai_communication_utils.SharedMemory(shm_key)
+    image_data = input_shm.read()
 
     # Check settings if image should be mirrored
     mirror_image = True
@@ -71,21 +66,26 @@ def parseImageFromSHM(shm_key: int, width: int, height: int, channels: int, exte
         new_width = width
         new_height = height
 
-    # Write un/modified image to shared memory
-    communication_utils.write_shm(output_shm, output_image)
+    global output_shm
+    if output_shm is None:
+        # Can reuse SHM ( if data is smaller or equal size ) or create new SHM and return ID
+        output_data_size = len(output_image)
+        output_shm = output_shm = nxai_communication_utils.SharedMemory(size=output_data_size)
+        logger.debug("Created SHM with ID: " + str(output_shm.id) + " and size: " + str(output_shm.size))
+    output_shm.write(output_image)
 
     return output_shm.id, new_width, new_height, channels
 
 
 def main():
     # Start socket listener to receive messages from NXAI runtime
-    server = communication_utils.startUnixSocketServer(Preprocessor_Socket_Path)
+    server = server = nxai_communication_utils.SocketListener(Preprocessor_Socket_Path)
     # Wait for messages in a loop
     while True:
         # Wait for input message from runtime
         try:
-            input_message, connection = communication_utils.waitForSocketMessage(server)
-        except socket.timeout:
+            connection, input_message = server.accept()
+        except nxai_communication_utils.SocketTimeout:
             # Request timed out. Continue waiting
             continue
 
@@ -98,7 +98,7 @@ def main():
             external_settings = image_header["ExternalProcessorSettings"]
 
         # Convert SHM Key to integer from string
-        shm_key = int(image_header["SHMKEY"])
+        shm_key = image_header["SHMKEY"]
 
         # Process image
         output_shm_id, width, height, channels = parseImageFromSHM(
@@ -118,7 +118,8 @@ def main():
         output_message = msgpack.packb(image_header)
 
         # Send message back to runtime
-        communication_utils.sendMessageOverConnection(connection, output_message)
+        connection.send(output_message)
+        connection.close()
 
 
 def signalHandler(sig, _):

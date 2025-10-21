@@ -38,6 +38,9 @@ int main( int argc, char *argv[] ) {
         exit( 2 );
     }
 
+    // Initialize socket system
+    nxai_socket_initialize_sockets();
+    
     // Set signal handler to listen for interrupt signals
     signal( SIGINT, handle_interrupt );
 

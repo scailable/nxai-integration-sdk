@@ -10,7 +10,7 @@ from pprint import pformat
 # Add the nxai-utilities python utilities
 script_location = os.path.dirname(sys.argv[0])
 sys.path.append(os.path.join(script_location, "../nxai-utilities/python-utilities"))
-import communication_utils
+import nxai_communication_utils
 
 
 CONFIG_FILE = os.path.join(script_location, "..", "etc", "plugin.noresponse.ini")
@@ -87,7 +87,7 @@ def signal_handler(sig, _):
 
 def main():
     # Start socket listener to receive messages from NXAI runtime
-    server = communication_utils.startUnixSocketServer(Postprocessor_Socket_Path)
+    server = nxai_communication_utils.SocketListener(Postprocessor_Socket_Path)
 
     logging.debug("Starting main" + str(Postprocessor_Socket_Path))
     # Wait for messages in a loop
@@ -96,16 +96,16 @@ def main():
         logging.debug("Starting loop")
 
         try:
-            input_message, _ = communication_utils.waitForSocketMessage(server)
+            input_message, _ = server.accept()
             logging.debug("Received input message")
             formatted_input_message = pformat(input_message)
             logger.debug(f"Input message: :\n\n{formatted_input_message}\n\n")
-        except socket.timeout:
+        except nxai_communication_utils.SocketTimeout:
             # Request timed out. Continue waiting
             continue
 
         # Parse input message
-        input_object = communication_utils.parseInferenceResults(input_message)
+        input_object = nxai_communication_utils.parseInferenceResults(input_message)
 
         formatted_unpacked_object = pformat(input_object)
         logging.info(f"Unpacked object:\n\n{formatted_unpacked_object}\n\n")

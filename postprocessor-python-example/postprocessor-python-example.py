@@ -2,7 +2,6 @@ import os
 import sys
 import signal
 import logging
-import logging.handlers
 import configparser
 from pprint import pformat
 
@@ -102,6 +101,9 @@ def main():
             logger.debug("Received input message")
         except nxai_communication_utils.SocketTimeout:
             # Request timed out. Continue waiting
+            continue
+        except nxai_communication_utils.SocketError as e:
+            logger.warning("An error occured while receiving a socket message:" + str(e))
             continue
 
         # Parse input message

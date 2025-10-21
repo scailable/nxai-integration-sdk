@@ -12,7 +12,7 @@ import time
 # Add the nxai-utilities python utilities
 script_location = os.path.dirname(sys.argv[0])
 sys.path.append(os.path.join(script_location, "../nxai-utilities/python-utilities"))
-import communication_utils
+import nxai_communication_utils
 
 
 CONFIG_FILE = os.path.join(script_location, "..", "etc", "plugin.clip.post.ini")
@@ -93,7 +93,7 @@ previous_event_time = {}
 def main():
     # Start socket listener to receive messages from NXAI runtime
     logger.debug("Creating socket at " + Postprocessor_Socket_Path)
-    server = communication_utils.startUnixSocketServer(Postprocessor_Socket_Path)
+    server = nxai_communication_utils.SocketListener(Postprocessor_Socket_Path)
 
     # Wait for messages in a loop
     while True:
@@ -101,14 +101,14 @@ def main():
         logger.debug("Waiting for input message")
 
         try:
-            input_message, connection = communication_utils.waitForSocketMessage(server)
+            connection, input_message = server.accept()
             logger.debug("Received input message")
-        except socket.timeout:
+        except nxai_communication_utils.SocketTimeout:
             # Request timed out. Continue waiting
             continue
 
         # Parse input message
-        input_object = communication_utils.parseInferenceResults(input_message)
+        input_object = nxai_communication_utils.parseInferenceResults(input_message)
 
         # Use pformat to format the deep object
         # formatted_unpacked_object = pformat(input_object)
@@ -191,10 +191,11 @@ def main():
         # logging.info(f"Packing:\n\n{formatted_unpacked_object}\n\n")
 
         # Write object back to string
-        output_message = communication_utils.writeInferenceResults(input_object)
+        output_message = nxai_communication_utils.writeInferenceResults(input_object)
 
         # Send message back to runtime
-        communication_utils.sendMessageOverConnection(connection, output_message)
+        connection.send(output_message)
+        connection.close()
 
         # Remove objects
         while len(objects_attributes) > 100:

@@ -11,7 +11,7 @@ import struct
 # Add the nxai-utilities python utilities
 script_location = os.path.dirname(sys.argv[0])
 sys.path.append(os.path.join(script_location, "../nxai-utilities/python-utilities"))
-import communication_utils
+import nxai_communication_utils
 
 CONFIG_FILE = os.path.join(script_location, "..", "etc", "plugin.tensor.pre.ini")
 
@@ -38,12 +38,14 @@ Preprocessor_Socket_Path = "/tmp/python-tensor-example-preprocessor.sock"
 global output_shm
 output_shm = None
 
-
+global shared_memory
+shared_memory = None
 def parseTensorFromSHM(shm_key: int, external_settings: dict):
-
+    global shared_memory
+    if shared_memory is None:
+        shared_memory = nxai_communication_utils.SharedMemory(key=shm_key)
     ######### Get input tensor from SHM
-    logger.info("Got shm key: " + str(shm_key))
-    tensor_raw_data = communication_utils.read_shm(shm_key)
+    tensor_raw_data = shared_memory.read()
     tensor_data = msgpack.unpackb(tensor_raw_data)
 
     if tensor_data is None or isinstance(tensor_data, dict) == False or "Tensors" not in tensor_data:
@@ -75,23 +77,23 @@ def parseTensorFromSHM(shm_key: int, external_settings: dict):
     if output_shm is None:
         # Can reuse SHM ( if data is smaller or equal size ) or create new SHM and return ID
         output_data_size = len(output_data)
-        output_shm = communication_utils.create_shm(output_data_size)
+        output_shm = nxai_communication_utils.SharedMemory(size=output_data_size)
         logger.debug("Created SHM with ID: " + str(output_shm.id) + " and size: " + str(output_shm.size))
 
-    communication_utils.write_shm(output_shm, output_data)
+    output_shm.write(output_data)
 
     return output_shm.id
 
 
 def main():
     # Start socket listener to receive messages from NXAI runtime
-    server = communication_utils.startUnixSocketServer(Preprocessor_Socket_Path)
+    server = server = nxai_communication_utils.SocketListener(Preprocessor_Socket_Path)
     # Wait for messages in a loop
     while True:
         # Wait for input message from runtime
         try:
-            input_message, connection = communication_utils.waitForSocketMessage(server)
-        except socket.timeout:
+            connection, input_message = server.accept()
+        except nxai_communication_utils.SocketTimeout:
             # Request timed out. Continue waiting
             continue
 
@@ -113,7 +115,8 @@ def main():
         output_message = msgpack.packb(tensor_header)
 
         # Send message back to runtime
-        communication_utils.sendMessageOverConnection(connection, output_message)
+        connection.send(output_message)
+        connection.close()
 
 
 def signalHandler(sig, _):

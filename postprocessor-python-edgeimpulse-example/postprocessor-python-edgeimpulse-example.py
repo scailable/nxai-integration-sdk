@@ -44,7 +44,7 @@ logging.basicConfig(
 
 # Add the nxai-utilities python utilities
 sys.path.append(os.path.join(script_location, "../nxai-utilities/python-utilities"))
-import communication_utils
+import nxai_communication_utils
 
 # The name of the postprocessor.
 # This is used to match the definition of the postprocessor with routing.
@@ -195,7 +195,7 @@ def main():
         os.remove(Postprocessor_Socket_Path)
     except OSError:
         pass
-    server = communication_utils.startUnixSocketServer(Postprocessor_Socket_Path)
+    server = nxai_communication_utils.SocketListener(Postprocessor_Socket_Path)
 
     # Get the current time at the start
     start_time = time.time()
@@ -209,9 +209,9 @@ def main():
         logging.debug("Wait for message " + str(counter))
         # Wait for input message from runtime
         try:
-            input_message, connection = communication_utils.waitForSocketMessage(server)
-            image_header = communication_utils.receiveMessageOverConnection(connection)
-        except socket.timeout:
+            connection, input_message = server.accept()
+            image_header = connection.receive()
+        except nxai_communication_utils.SocketTimeout:
             # Request timed out. Continue waiting
             continue
 
@@ -288,7 +288,8 @@ def main():
             image_header = msgpack.unpackb(image_header)
 
             # Read image
-            image_data = communication_utils.read_shm(image_header["SHMKey"])
+            shared_memory = nxai_communication_utils.SharedMemory(key=image_header["SHMKey"])
+            image_data = shared_memory.read()
             with Image.frombytes(
                 "RGB", (image_header["Width"], image_header["Height"]), image_data
             ) as image:
@@ -317,7 +318,7 @@ def main():
             message_bytes = msgpack.packb(parsed_response)
 
             # Send message back to runtime
-            communication_utils.sendMessageOverConnection(connection, message_bytes)
+            connection.send(message_bytes)
 
 
 if __name__ == "__main__":
