@@ -22,12 +22,12 @@ else:
     LOG_FILE = os.path.join(script_location, "plugin.tensor.pre.log")
 
 # Initialize plugin and logging, script makes use of INFO and DEBUG levels
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - example - %(message)s",
-    filename=LOG_FILE,
-    filemode="w",
-)
+handler_stream = logging.StreamHandler(sys.stdout)
+handler_stream.setLevel(logging.DEBUG)
+handler_file = logging.FileHandler(filename=LOG_FILE, mode="w")
+handler_file.setLevel(logging.DEBUG)
+
+logging.basicConfig(format="%(asctime)s - %(levelname)s - example - %(message)s", handlers=[handler_stream, handler_file])
 
 # The socket this preprocessor will listen on.
 # This is always given as the first argument when the process is started
@@ -38,14 +38,16 @@ Preprocessor_Socket_Path = "/tmp/python-tensor-example-preprocessor.sock"
 global output_shm
 output_shm = None
 
-global shared_memory
-shared_memory = None
+global input_shm
+input_shm = None
+
+
 def parseTensorFromSHM(shm_key: int, external_settings: dict):
-    global shared_memory
-    if shared_memory is None:
-        shared_memory = nxai_communication_utils.SharedMemory(key=shm_key)
+    global input_shm
+    if input_shm is None:
+        input_shm = nxai_communication_utils.SharedMemory(key=shm_key)
     ######### Get input tensor from SHM
-    tensor_raw_data = shared_memory.read()
+    tensor_raw_data = input_shm.read()
     tensor_data = msgpack.unpackb(tensor_raw_data)
 
     if tensor_data is None or isinstance(tensor_data, dict) == False or "Tensors" not in tensor_data:
@@ -78,16 +80,16 @@ def parseTensorFromSHM(shm_key: int, external_settings: dict):
         # Can reuse SHM ( if data is smaller or equal size ) or create new SHM and return ID
         output_data_size = len(output_data)
         output_shm = nxai_communication_utils.SharedMemory(size=output_data_size)
-        logger.debug("Created SHM with ID: " + str(output_shm.id) + " and size: " + str(output_shm.size))
+        logger.info("Created SHM with Key: " + output_shm.key)
 
     output_shm.write(output_data)
 
-    return output_shm.id
+    return output_shm.key
 
 
 def main():
     # Start socket listener to receive messages from NXAI runtime
-    server = server = nxai_communication_utils.SocketListener(Preprocessor_Socket_Path)
+    server = nxai_communication_utils.SocketListener(Preprocessor_Socket_Path)
     # Wait for messages in a loop
     while True:
         # Wait for input message from runtime
@@ -106,10 +108,10 @@ def main():
             external_settings = tensor_header["ExternalProcessorSettings"]
 
         # Process image
-        output_shm_id = parseTensorFromSHM(tensor_header["SHMKEY"], external_settings)
+        output_shm_key = parseTensorFromSHM(tensor_header["SHMKEY"], external_settings)
 
-        if output_shm_id != 0:
-            tensor_header["SHMID"] = output_shm_id
+        if output_shm_key != 0:
+            tensor_header["SHMKEY"] = output_shm_key
 
         # Write header to respond
         output_message = msgpack.packb(tensor_header)

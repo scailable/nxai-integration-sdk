@@ -21,12 +21,12 @@ else:
     LOG_FILE = os.path.join(script_location, "plugin.image.pre.log")
 
 # Initialize plugin and logging, script makes use of INFO and DEBUG levels
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - example - %(message)s",
-    filename=LOG_FILE,
-    filemode="w",
-)
+handler_stream = logging.StreamHandler(sys.stdout)
+handler_stream.setLevel(logging.DEBUG)
+handler_file = logging.FileHandler(filename=LOG_FILE, mode="w")
+handler_file.setLevel(logging.DEBUG)
+
+logging.basicConfig(format="%(asctime)s - %(levelname)s - example - %(message)s", handlers=[handler_stream, handler_file])
 
 # The socket this preprocessor will listen on.
 # This is always given as the first argument when the process is started
@@ -38,10 +38,12 @@ global output_shm, input_shm
 output_shm = None
 input_shm = None
 
+
 def parseImageFromSHM(shm_key: str, width: int, height: int, channels: int, external_settings: dict):
     # Read image data from the shared memory
+    global input_shm
     if input_shm is None:
-        input_shm = nxai_communication_utils.SharedMemory(shm_key)
+        input_shm = nxai_communication_utils.SharedMemory(key=shm_key)
     image_data = input_shm.read()
 
     # Check settings if image should be mirrored
@@ -70,16 +72,16 @@ def parseImageFromSHM(shm_key: str, width: int, height: int, channels: int, exte
     if output_shm is None:
         # Can reuse SHM ( if data is smaller or equal size ) or create new SHM and return ID
         output_data_size = len(output_image)
-        output_shm = output_shm = nxai_communication_utils.SharedMemory(size=output_data_size)
-        logger.debug("Created SHM with ID: " + str(output_shm.id) + " and size: " + str(output_shm.size))
-    output_shm.write(output_image)
+        output_shm = nxai_communication_utils.SharedMemory(size=output_data_size)
+        logger.info("Created SHM with Key: " + output_shm.key)
+    output_shm.write(bytes(output_image))
 
-    return output_shm.id, new_width, new_height, channels
+    return output_shm.key, new_width, new_height, channels
 
 
 def main():
     # Start socket listener to receive messages from NXAI runtime
-    server = server = nxai_communication_utils.SocketListener(Preprocessor_Socket_Path)
+    server = nxai_communication_utils.SocketListener(Preprocessor_Socket_Path)
     # Wait for messages in a loop
     while True:
         # Wait for input message from runtime
@@ -101,7 +103,7 @@ def main():
         shm_key = image_header["SHMKEY"]
 
         # Process image
-        output_shm_id, width, height, channels = parseImageFromSHM(
+        output_shm_key, width, height, channels = parseImageFromSHM(
             shm_key,
             image_header["Width"],
             image_header["Height"],
@@ -109,7 +111,7 @@ def main():
             external_settings,
         )
 
-        image_header["SHMID"] = str(output_shm_id)
+        image_header["SHMKEY"] = output_shm_key
         image_header["Width"] = width
         image_header["Height"] = height
         image_header["Channels"] = channels

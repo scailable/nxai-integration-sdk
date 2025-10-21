@@ -92,16 +92,17 @@ def parseTensorFromSHM(shm_key: str, external_settings: dict):
     if output_shm is None:
         # Can reuse SHM ( if data is smaller or equal size ) or create new SHM and return ID
         output_data_size = len(output_data)
-        output_shm = output_shm = nxai_communication_utils.SharedMemory(size=output_data_size)
-        logger.debug("Created SHM with ID: " + str(output_shm.id) + " and size: " + str(output_shm.size))
+        output_shm = nxai_communication_utils.SharedMemory(size=output_data_size)
+        logger.info("Created SHM with Key: " + output_shm.key)
+
     output_shm.write(output_data)
 
-    return output_shm.id
+    return output_shm.key
 
 
 def main():
     # Start socket listener to receive messages from NXAI runtime
-    server = server = nxai_communication_utils.SocketListener(Preprocessor_Socket_Path)
+    server = nxai_communication_utils.SocketListener(Preprocessor_Socket_Path)
     # Wait for messages in a loop
     while True:
         # Wait for input message from runtime
@@ -120,10 +121,10 @@ def main():
             external_settings = tensor_header["ExternalProcessorSettings"]
 
         # Process image
-        output_shm_id = parseTensorFromSHM(tensor_header["SHMKEY"], external_settings)
+        output_shm_key = parseTensorFromSHM(tensor_header["SHMKEY"], external_settings)
 
-        if output_shm_id != 0:
-            tensor_header["SHMID"] = output_shm_id
+        if output_shm_key != 0:
+            tensor_header["SHMKEY"] = output_shm_key
 
         # Write header to respond
         output_message = msgpack.packb(tensor_header)
