@@ -1,9 +1,6 @@
 import os
 import sys
-import socket
-import signal
 import logging
-import logging.handlers
 import configparser
 
 # Add the nxai-utilities python utilities
@@ -80,11 +77,6 @@ def set_log_level(level):
         logger.error(e, exc_info=True)
 
 
-def signal_handler(sig, _):
-    logger.info("Received interrupt signal: " + str(sig))
-    sys.exit(0)
-
-
 def main():
     # Start socket listener to receive messages from NXAI runtime
     server = nxai_communication_utils.SocketListener(Postprocessor_Socket_Path)
@@ -103,6 +95,10 @@ def main():
 
         # Parse input message
         input_object = nxai_communication_utils.parseInferenceResults(input_message)
+        if isinstance(input_object, nxai_communication_utils.ExitSignal):
+            logger.info("Received exit signal.")
+            connection.close()
+            break
 
         # Use pformat to format the deep object
         # formatted_unpacked_object = pformat(input_object)
@@ -151,8 +147,7 @@ if __name__ == "__main__":
     # Parse input arguments
     if len(sys.argv) > 1:
         Postprocessor_Socket_Path = sys.argv[1]
-    # Handle interrupt signals
-    signal.signal(signal.SIGTERM, signal_handler)
+
     # Start program
     try:
         main()

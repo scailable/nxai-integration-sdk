@@ -1,10 +1,7 @@
 import os
 import sys
-import socket
-import signal
 import msgpack
 import logging
-import logging.handlers
 import configparser
 
 # Add the nxai-utilities python utilities
@@ -92,6 +89,9 @@ def main():
             continue
 
         image_header = msgpack.unpackb(input_message)
+        if "EXIT" in image_header:
+            # AI Manager sent exit signal
+            break
         print("EXAMPLE PREPROCESSOR: Received input message: ", image_header)
 
         external_settings = {}
@@ -122,15 +122,6 @@ def main():
         # Send message back to runtime
         connection.send(output_message)
         connection.close()
-
-
-def signalHandler(sig, _):
-    print("EXAMPLE PREPROCESSOR: Received interrupt signal: ", sig)
-    # Detach and destroy output shm
-    if output_shm is not None:
-        output_shm.detach()
-        output_shm.remove()
-    sys.exit(0)
 
 
 def config():
@@ -166,8 +157,6 @@ if __name__ == "__main__":
     # Parse input arguments
     if len(sys.argv) > 1:
         Preprocessor_Socket_Path = sys.argv[1]
-    # Handle interrupt signals
-    signal.signal(signal.SIGTERM, signalHandler)
 
     ## initialize the logger
     logger = logging.getLogger(__name__)

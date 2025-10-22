@@ -17,18 +17,6 @@
 volatile sig_atomic_t interrupt_flag = false;
 
 char *processMpackDocument( const char *input_buffer, size_t input_buffer_length, size_t *output_buffer_length );
-/**
- * @brief Function to handle interrupt signals
- *
- * When the NXAI Runtime is stopped, it sends an interrupt signal to all postprocessors it started
- * and waits for them to exit.
- *
- * This function sets a global interrupt flag which stops the socket listener loop. After the loop is broken
- * the socket is closed and the application exits gracefully.
- *
- * @param sig
- */
-void handle_interrupt( int sig );
 
 // Main function, the entry point of the application
 int main( int argc, char *argv[] ) {
@@ -40,9 +28,6 @@ int main( int argc, char *argv[] ) {
 
     // Initialize socket system
     nxai_socket_initialize_sockets();
-    
-    // Set signal handler to listen for interrupt signals
-    signal( SIGINT, handle_interrupt );
 
     const char *socket_path = argv[1];
 
@@ -68,9 +53,14 @@ int main( int argc, char *argv[] ) {
         // Process the Mpack document
         size_t output_length;
         char *output_message = processMpackDocument( input_buffer, message_length, &output_length );
+        if ( output_message == NULL ) {
+            // Error or exit signal received from AI Manager
+            nxai_close_socket( connection_fd );
+            break;
+        }
 
         // Send the processed output back to the socket
-        nxai_socket_send_to_connection( connection_fd, output_message, ( uint32_t ) output_length );
+        nxai_socket_send_to_connection( connection_fd, output_message, (uint32_t) output_length );
 
         // Free buffer
         free( output_message );
@@ -105,6 +95,13 @@ char *processMpackDocument( const char *input_buffer, size_t input_buffer_length
     mpack_tree_init_data( &tree, input_buffer, input_buffer_length );
     mpack_tree_parse( &tree );
     mpack_node_t inference_results_root = mpack_tree_root( &tree );
+
+    // First check if AI Manager sent exit signal
+    mpack_node_t exit_signal = mpack_node_map_cstr_optional( inference_results_root, "EXIT" );
+    if ( mpack_node_is_missing( exit_signal ) == false ) {
+        printf( "EXAMPLE POSTPROCESSOR: Exit signal received.\n" );
+        return NULL;
+    }
 
     // Read timestamp
     mpack_node_t timestamp_node = mpack_node_map_cstr( inference_results_root, "Timestamp" );
@@ -237,11 +234,4 @@ char *processMpackDocument( const char *input_buffer, size_t input_buffer_length
     free( scores );
 
     return mpack_buffer;
-}
-
-// Function to handle interrupt signals
-void handle_interrupt( int signal ) {
-    (void) signal;
-    // Set the interrupt flag to true on receiving an interrupt signal
-    interrupt_flag = true;
 }

@@ -5,10 +5,7 @@ import instant_clip_tokenizer
 
 import os
 import sys
-import socket
-import signal
 import logging
-import logging.handlers
 import msgpack
 import configparser
 import struct
@@ -113,6 +110,9 @@ def main():
             continue
 
         tensor_header = msgpack.unpackb(input_message)
+        if "EXIT" in tensor_header:
+            # AI Manager sent exit signal
+            break
         print("EXAMPLE PREPROCESSOR: Received input message: ", tensor_header)
 
         external_settings = {}
@@ -132,16 +132,6 @@ def main():
         # Send message back to runtime
         connection.send(output_message)
         connection.close()
-
-
-def signalHandler(sig, _):
-    print("EXAMPLE PREPROCESSOR: Received interrupt signal: ", sig)
-    logger.info("EXAMPLE PREPROCESSOR: Received interrupt signal: " + str(sig))
-    # Detach and destroy output shm
-    if output_shm is not None:
-        output_shm.detach()
-        output_shm.remove()
-    sys.exit(0)
 
 
 def config():
@@ -177,8 +167,6 @@ if __name__ == "__main__":
     # Parse input arguments
     if len(sys.argv) > 1:
         Preprocessor_Socket_Path = sys.argv[1]
-    # Handle interrupt signals
-    signal.signal(signal.SIGTERM, signalHandler)
 
     ## initialize the logger
     logger = logging.getLogger(__name__)

@@ -1,9 +1,6 @@
 import os
 import sys
-import socket
-import signal
 import logging
-import logging.handlers
 import configparser
 from pprint import pformat
 import msgpack
@@ -20,13 +17,10 @@ LOG_FILE = os.path.join(script_location, "..", "etc", "plugin.image.log")
 # Initialize plugin and logging, script makes use of INFO and DEBUG levels
 handler_stream = logging.StreamHandler(sys.stdout)
 handler_stream.setLevel(logging.DEBUG)
-handler_file = logging.FileHandler(filename=LOG_FILE,mode="w")
+handler_file = logging.FileHandler(filename=LOG_FILE, mode="w")
 handler_file.setLevel(logging.INFO)
 
-logging.basicConfig(
-    format="%(asctime)s - %(levelname)s - example - %(message)s",
-    handlers=[handler_stream,handler_file]
-)
+logging.basicConfig(format="%(asctime)s - %(levelname)s - example - %(message)s", handlers=[handler_stream, handler_file])
 
 import nxai_communication_utils
 
@@ -41,6 +35,8 @@ Postprocessor_Socket_Path = "/tmp/python-image-postprocessor.sock"
 
 global shared_memory
 shared_memory = None
+
+
 def parse_image_from_shm(shm_key: int, width: int, height: int, channels: int):
     global shared_memory
     if shared_memory is None:
@@ -82,11 +78,6 @@ def set_log_level(level):
         logger.error(e, exc_info=True)
 
 
-def signal_handler(sig, _):
-    logger.info("Received interrupt signal: " + str(sig))
-    sys.exit(0)
-
-
 def main():
     # Start socket listener to receive messages from NXAI runtime
     server = nxai_communication_utils.SocketListener(Postprocessor_Socket_Path)
@@ -98,12 +89,17 @@ def main():
         try:
             connection, input_message = server.accept()
             logger.debug("Received input message")
-            formatted_input_message = pformat(input_message)
-            logger.debug(f"Input message: :\n\n{formatted_input_message}\n\n")
 
         except nxai_communication_utils.SocketTimeout:
             # Request timed out. Continue waiting
             continue
+
+        # Parse input message
+        input_object = nxai_communication_utils.parseInferenceResults(input_message)
+        if isinstance(input_object, nxai_communication_utils.ExitSignal):
+            logger.info("Received exit signal.")
+            connection.close()
+            break
 
         # Since we're also expecting an image, receive the image header
         try:
@@ -113,8 +109,6 @@ def main():
             logger.warning("Did not receive image header. Are the settings correct?")
             continue
 
-        # Parse input message
-        input_object = nxai_communication_utils.parseInferenceResults(input_message)
         formatted_unpacked_object = pformat(input_object)
         logger.info(f"Unpacked input image:\n\n{formatted_unpacked_object}\n\n")
 
@@ -166,8 +160,7 @@ if __name__ == "__main__":
     # Parse input arguments
     if len(sys.argv) > 1:
         Postprocessor_Socket_Path = sys.argv[1]
-    # Handle interrupt signals
-    signal.signal(signal.SIGTERM, signal_handler)
+
     # Start program
     try:
         main()
