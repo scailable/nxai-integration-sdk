@@ -1,13 +1,13 @@
 Postprocessor Python Setting Example
 ============================
 
-This example application provides an example on how to create a Python based postprocessor that can be integrated with the NXAI Edge AI Manager.
+This example application provides an example on how to create a Python based postprocessor that can be integrated with the NXAI AI Manager.
 
 This plugin defines its settings in its definition in `external_postprocessors.json`. These settings then appear in the plugin UI and will be passed through to the external postprocessor.
 
 # Postprocessors Control Flow
 
-The normal control flow of a postprocessor is to receive a MessagePack binary message representing the inference results from the NXAI Edge AI Manager, and return the same or an altered version of the received MessagePack message.
+The normal control flow of a postprocessor is to receive a MessagePack binary message representing the inference results from the NXAI AI Manager, and return the same or an altered version of the received MessagePack message.
 
 An external postprocessor can parse the incoming MessagePack message, do analysis, optionally alter it, and return it. The alterations made by an external postprocessor will be kept and sent to the Network Optix server to be represented as bounding boxes or events.
 
@@ -177,9 +177,9 @@ make
 
 Once compiled, copy the executable to an accessible directory.
 
-A convenience directory within the Edge AI Manager installation is created for this purpose at `/opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/postprocessors`.
+A convenience directory within the AI Manager installation is created for this purpose at `/opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/postprocessors`.
 
-The application and settings files you add must be readable and executable by the NX AI Edge AI Manager. This can be achieved by running:
+The application and settings files you add must be readable and executable by the NX AI AI Manager. This can be achieved by running:
 
 ```
 sudo chmod -R 777 /opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/postprocessors
@@ -193,15 +193,21 @@ cmake --build . --target install
 
 ## Defining the postprocessor
 
-Create a configuration file at `/opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/postprocessors/external_postprocessors.json` and add the details of your postprocessor to the root object of that file.
-
-For example:
+Create a configuration file at
+```
+/opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/postprocessors/external_postprocessors.json
+```
+for Linux, or
+```
+C:\Program Files\Network Optix\Nx Meta\MediaServer\plugins\nxai_plugin\nxai_manager\postprocessors\external_postprocessors.json
+```
+for Windows, and add the details of your postprocessor to the root object of that file. For example: 
 
 ``` json
 {
     "externalPostprocessors": [
         {
-            "Name":"Example-Postprocessor-Setting",
+            "Name":"Example-Postprocessor-Settings",
             "Command":"/opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/postprocessors/postprocessor-python-settings-example",
             "SocketPath":"/tmp/python-example-settings-postprocessor.sock",
             "ReceiveInputTensor": false,
@@ -226,8 +232,39 @@ For example:
     ]
 }
 ```
+For Linux, and
+```json
+{
+    "externalPostprocessors": [
+        {
+            "Name":"Example-Postprocessor-Settings",
+            "Command":"C:\\Program Files\\Network Optix\\Nx Meta\\MediaServer\\plugins\\nxai_plugin\\nxai_manager\\postprocessors\\postprocessor-python-settings-example.exe",
+            "SocketPath":"C:\\Users\\user\\AppData\\Local\\Temp\\python-settings-postprocessor.sock",
+            "ReceiveInputTensor": false,
+            "ReceiveConfidenceData": false,
+            "Settings": [
+                {
+                    "type": "TextField",
+                    "name": "externalprocessor.attributeName",
+                    "caption": "Attribute Name",
+                    "description": "The name of the example attribute",
+                    "defaultValue": "Key"
+                },
+                {
+                    "type": "TextField",
+                    "name": "externalprocessor.attributeValue",
+                    "caption": "Attribute Value",
+                    "description": "The value of the example attribute",
+                    "defaultValue": "Value"
+                }
+            ]
+        }
+    ]
+}
+```
+For Windows.
 
-This tells the Edge AI Manager about the postprocessor:
+This tells the AI Manager about the postprocessor:
 - **Name** gives the postprocesor a name so it can be selected later
 - **Command** defines how to start the postprocessor
 - **SocketPath** tells the AI Manager where to send data to so the external postprocessor will receive it

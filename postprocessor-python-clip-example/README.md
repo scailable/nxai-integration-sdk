@@ -1,13 +1,13 @@
 Postprocessor Python Clip Example
 ============================
 
-This example application provides an example on how to create a Python based postprocessor that can be integrated with the NXAI Edge AI Manager.
+This example application provides an example on how to create a Python based postprocessor that can be integrated with the NXAI AI Manager.
 
 This postprocessor looks for text prompts defined in the settings of the CLIP preprocessor, and will generate an event with the prompt information.
 
 # Postprocessors Control Flow
 
-The normal control flow of a postprocessor is to receive a MessagePack binary message representing the inference results from the NXAI Edge AI Manager, and return the same or an altered version of the received MessagePack message.
+The normal control flow of a postprocessor is to receive a MessagePack binary message representing the inference results from the NXAI AI Manager, and return the same or an altered version of the received MessagePack message.
 
 An external postprocessor can parse the incoming MessagePack message, do analysis, optionally alter it, and return it. The alterations made by an external postprocessor will be kept and sent to the Network Optix server to be represented as bounding boxes or events.
 
@@ -177,9 +177,9 @@ make
 
 Once compiled, copy the executable to an accessible directory.
 
-A convenience directory within the Edge AI Manager installation is created for this purpose at `/opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/postprocessors`.
+A convenience directory within the AI Manager installation is created for this purpose at `/opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/postprocessors`.
 
-The application and settings files you add must be readable and executable by the NX AI Edge AI Manager. This can be achieved by running:
+The application and settings files you add must be readable and executable by the NX AI AI Manager. This can be achieved by running:
 
 ```
 sudo chmod -R 777 /opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/postprocessors
@@ -193,9 +193,15 @@ cmake --build . --target install
 
 ## Defining the postprocessor
 
-Create a configuration file at `/opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/postprocessors/external_postprocessors.json` and add the details of your postprocessor to the root object of that file.
-
-For example:
+Create a configuration file at
+```
+/opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/postprocessors/external_postprocessors.json
+```
+for Linux, or
+```
+C:\Program Files\Network Optix\Nx Meta\MediaServer\plugins\nxai_plugin\nxai_manager\postprocessors\external_postprocessors.json
+```
+for Windows, and add the details of your postprocessor to the root object of that file. For example: 
 
 ``` json
 {
@@ -227,8 +233,40 @@ For example:
     ]
 }
 ```
+For Linux, and
+```json
+{
+    "externalPostprocessors": [
+        {
+            "Name":"Example-Postprocessor-Clip",
+            "Command":"C:\\Program Files\\Network Optix\\Nx Meta\\MediaServer\\plugins\\nxai_plugin\\nxai_manager\\postprocessors\\postprocessor-python-clip-example.exe",
+            "SocketPath":"C:\\Users\\user\\AppData\\Local\\Temp\\example-clip-postprocessor.sock",
+            "ReceiveInputTensor": false,
+            "ReceiveConfidenceData": false,
+            "Events": [
+                {
+                    "ID":"nx.clip.event",
+                    "Name":"CLIP Prompt Recognized"
+                }
+            ],
+            "Settings": [
+                {
+                    "type": "SpinBox",
+                    "name": "externalprocessor.eventCooldown",
+                    "caption": "Generate event every (s):",
+                    "description": "The postprocessor won't generate an event more frequently than this, unless the state changes.",
+                    "defaultValue": 5,
+                    "minValue": 0,
+                    "maxValue": 9999999999
+                }
+            ]
+        }
+    ]
+}
+```
+For Windows.
 
-This tells the Edge AI Manager about the postprocessor:
+This tells the AI Manager about the postprocessor:
 - **Name** gives the postprocesor a name so it can be selected later
 - **Command** defines how to start the postprocessor
 - **SocketPath** tells the AI Manager where to send data to so the external postprocessor will receive it

@@ -138,9 +138,9 @@ make
 
 Once compiled, copy the executable to an accessible directory.
 
-A convenience directory within the Edge AI Manager installation is created for this purpose at `/opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/postprocessors`.
+A convenience directory within the AI Manager installation is created for this purpose at `/opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/postprocessors`.
 
-The application and settings files you add must be readable and executable by the NX AI Edge AI Manager. This can be achieved by running:
+The application and settings files you add must be readable and executable by the NX AI AI Manager. This can be achieved by running:
 
 ```
 sudo chmod -R 777 /opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/postprocessors
@@ -154,7 +154,15 @@ cmake --build . --target install
 
 ## Defining the postprocessor
 
-Create a configuration file at `/opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/postprocessors/external_postprocessors.json` and add the details of your postprocessor to the root object of that file. For example: 
+Create a configuration file at
+```
+/opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/postprocessors/external_postprocessors.json
+```
+for Linux, or
+```
+C:\Program Files\Network Optix\Nx Meta\MediaServer\plugins\nxai_plugin\nxai_manager\postprocessors\external_postprocessors.json
+```
+for Windows, and add the details of your postprocessor to the root object of that file. For example: 
 
 ``` json
 {
@@ -168,8 +176,22 @@ Create a configuration file at `/opt/networkoptix-metavms/mediaserver/bin/plugin
     ]
 }
 ```
+For Linux, and
+```json
+{
+    "externalPostprocessors": [
+        {
+            "Name":"Cloud-Inference-Postprocessor",
+            "Command":"C:\\Program Files\\Network Optix\\Nx Meta\\MediaServer\\plugins\\nxai_plugin\\nxai_manager\\postprocessors\\postprocessor-cloud-inference-example.exe",
+            "SocketPath":"C:\\Users\\user\\AppData\\Local\\Temp\\example-cloud-postprocessor.sock",
+            "ReceiveInputTensor": true,
+        }
+    ]
+}
+```
+For Windows.
 
-This tells the Edge AI Manager about the postprocessor:
+This tells the AI Manager about the postprocessor:
 - **Name** gives the postprocesor a name so it can be selected later
 - **Command** defines how to start the postprocessor
 - **SocketPath** tells the AI Manager where to send data to so the external postprocessor will receive it
