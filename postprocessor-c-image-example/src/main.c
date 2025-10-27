@@ -2,7 +2,6 @@
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
-#include <unistd.h>
 
 // Local includes
 #include "mpack.h"
@@ -21,18 +20,6 @@ volatile sig_atomic_t interrupt_flag = false;
 uint64_t processInputTensor( const char *input_buffer, size_t message_length );
 
 char *processMpackDocument( const char *input_buffer, size_t input_buffer_length, size_t *output_buffer_length, char *image_header, size_t header_length );
-/**
- * @brief Function to handle interrupt signals
- *
- * When the NXAI Runtime is stopped, it sends an interrupt signal to all postprocessors it started
- * and waits for them to exit.
- *
- * This function sets a global interrupt flag which stops the socket listener loop. After the loop is broken
- * the socket is closed and the application exits gracefully.
- *
- * @param sig
- */
-void handle_interrupt( int sig );
 
 // Main function, the entry point of the application
 int main( int argc, char *argv[] ) {
@@ -42,8 +29,8 @@ int main( int argc, char *argv[] ) {
         exit( 2 );
     }
 
-    // Set signal handler to listen for interrupt signals
-    signal( SIGINT, handle_interrupt );
+    // Initialize socket system
+    nxai_socket_initialize_sockets();
 
     const char *socket_path = argv[1];
 
@@ -54,12 +41,12 @@ int main( int argc, char *argv[] ) {
     uint32_t message_length;
 
     // Create a listener socket
-    int socket_fd = nxai_socket_create_listener( socket_path );
+    nxai_socket_t socket_fd = nxai_socket_create_listener( socket_path );
 
     // Main loop: continues until an interrupt signal is received
     while ( interrupt_flag == false ) {
         // Wait for a message on the socket
-        int connection_fd = nxai_socket_await_message( socket_fd, &allocated_buffer_size, &input_buffer, &message_length );
+        nxai_socket_t connection_fd = nxai_socket_await_message( socket_fd, &allocated_buffer_size, &input_buffer, &message_length );
 
         // If connection times out, it continues to wait for the message again
         if ( connection_fd == -1 ) {
@@ -75,15 +62,20 @@ int main( int argc, char *argv[] ) {
         // Process the Mpack document
         size_t output_length;
         char *output_message = processMpackDocument( input_buffer, message_length, &output_length, image_header, header_length );
+        if ( output_message == NULL ) {
+            // Error or exit signal received from AI Manager
+            nxai_close_socket( connection_fd );
+            break;
+        }
 
         // Send the processed output back to the socket
-        nxai_socket_send_to_connection( connection_fd, output_message, output_length );
+        nxai_socket_send_to_connection( connection_fd, output_message, (uint32_t) output_length );
 
         // Free buffer
         free( output_message );
 
         // Close the connection
-        if ( close( connection_fd ) == -1 ) {
+        if ( nxai_close_socket( connection_fd ) == -1 ) {
             fprintf( stderr, "EXAMPLE POSTPROCESSOR: Warning: Sender socket close error!\n" );
         }
     }
@@ -115,6 +107,13 @@ char *processMpackDocument( const char *input_buffer, size_t input_buffer_length
     mpack_tree_init_data( &tree, input_buffer, input_buffer_length );
     mpack_tree_parse( &tree );
     mpack_node_t inference_results_root = mpack_tree_root( &tree );
+
+    // First check if AI Manager sent exit signal
+    mpack_node_t exit_signal = mpack_node_map_cstr_optional( inference_results_root, "EXIT" );
+    if ( mpack_node_is_missing( exit_signal ) == false ) {
+        printf( "EXAMPLE POSTPROCESSOR: Exit signal received.\n" );
+        return NULL;
+    }
 
     // Read timestamp
     mpack_node_t timestamp_node = mpack_node_map_cstr( inference_results_root, "Timestamp" );
@@ -265,11 +264,4 @@ uint64_t processInputTensor( const char *input_buffer, size_t message_length ) {
     nxai_shm_close( shared_data );
 
     return cumulative_count;
-}
-
-// Function to handle interrupt signals
-void handle_interrupt( int signal ) {
-    (void) signal;
-    // Set the interrupt flag to true on receiving an interrupt signal
-    interrupt_flag = true;
 }

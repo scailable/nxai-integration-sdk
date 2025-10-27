@@ -80,6 +80,12 @@ Set up CMake configuration:
 cmake ..
 ```
 
+Build a single processor:
+
+```
+cmake --build build --target <processor-name>
+```
+
 Build all targets:
 
 ```shell
@@ -95,8 +101,13 @@ It is possible to only run specific examples, refer to the readme files in the s
 Before installing make sure the target directory is writable.
 
 ```shell
-sudo chmod 777 /opt/networkoptix-metavms/mediaserver/bin/plugins/nxai_plugin/nxai_manager/postprocessors/
-sudo chmod 777 /opt/networkoptix-metavms/mediaserver/bin/plugins/nxai_plugin/nxai_manager/preprocessors/
+sudo chmod 777 /opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/postprocessors/
+sudo chmod 777 /opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/preprocessors/
+```
+
+To install a single processor to the default folder:
+```
+cmake --install build --component <processor-name>
 ```
 
 To install the generated pre/postprocessor examples to the default pre/postprocessors folder:
@@ -107,14 +118,14 @@ cmake --build . --target install
 
 ## Defining the pre/postprocessors
 
-Create a configuration file at `/opt/networkoptix-metavms/mediaserver/bin/plugins/nxai_plugin/nxai_manager/postprocessors/external_postprocessors.json` or `/opt/networkoptix-metavms/mediaserver/bin/plugins/nxai_plugin/nxai_manager/preprocessors/external_preprocessors.json` and add the details of your pre/postprocessors to the root object of that file. For example the following file enables *all* python based pre/postprocessors:
+Create a configuration file at `/opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/postprocessors/external_postprocessors.json` or `/opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/preprocessors/external_preprocessors.json` and add the details of your pre/postprocessors to the root object of that file. For example the following file enables *all* python based pre/postprocessors:
 
 ```json
 {
     "externalPostprocessors": [
         {
             "Name":"EI-Upload-Postprocessor",
-            "Command":"/opt/networkoptix-metavms/mediaserver/bin/plugins/nxai_plugin/nxai_manager/postprocessors/postprocessor-python-edgeimpulse-example",
+            "Command":"/opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/postprocessors/postprocessor-python-edgeimpulse-example",
             "SocketPath":"/tmp/python-edgeimpulse-postprocessor.sock",
             "ReceiveInputTensor": true,
             "RunLast": false,
@@ -122,19 +133,19 @@ Create a configuration file at `/opt/networkoptix-metavms/mediaserver/bin/plugin
         },
         {
             "Name":"Example-Postprocessor",
-            "Command":"/opt/networkoptix-metavms/mediaserver/bin/plugins/nxai_plugin/nxai_manager/postprocessors/postprocessor-python-example",
+            "Command":"/opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/postprocessors/postprocessor-python-example",
             "SocketPath":"/tmp/python-example-postprocessor.sock",
             "ReceiveInputTensor": false
         },
         {
             "Name":"Image-Postprocessor",
-            "Command":"/opt/networkoptix-metavms/mediaserver/bin/plugins/nxai_plugin/nxai_manager/postprocessors/postprocessor-python-image-example",
+            "Command":"/opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/postprocessors/postprocessor-python-image-example",
             "SocketPath":"/tmp/python-image-postprocessor.sock",
             "ReceiveInputTensor": true
         },
         {
             "Name":"NoResponse-Postprocessor",
-            "Command":"/opt/networkoptix-metavms/mediaserver/bin/plugins/nxai_plugin/nxai_manager/postprocessors/postprocessor-python-noresponse-example",
+            "Command":"/opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/postprocessors/postprocessor-python-noresponse-example",
             "SocketPath":"/tmp/python-noresponse-postprocessor.sock",
             "ReceiveInputTensor": false,
             "ReceiveBinaryData": false,
@@ -142,7 +153,7 @@ Create a configuration file at `/opt/networkoptix-metavms/mediaserver/bin/plugin
         },
         {
             "Name":"Cloud-Inference-Postprocessor",
-            "Command":"/opt/networkoptix-metavms/mediaserver/bin/plugins/nxai_plugin/nxai_manager/postprocessors/postprocessor-cloud-inference-example",
+            "Command":"/opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/postprocessors/postprocessor-cloud-inference-example",
             "SocketPath":"/tmp/python-cloud-inference-postprocessor.sock",
             "ReceiveInputTensor": true
         }
@@ -156,7 +167,7 @@ Create a configuration file at `/opt/networkoptix-metavms/mediaserver/bin/plugin
     "externalPreprocessors": [
         {
             "Name":"Example-Preprocessor",
-            "Command":"/opt/networkoptix-metavms/mediaserver/bin/plugins/nxai_plugin/nxai_manager/preprocessors/preprocessor-python-example",
+            "Command":"/opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/preprocessors/preprocessor-python-example",
             "SocketPath":"/tmp/example-preprocessor.sock"
         }
     ]
@@ -174,8 +185,8 @@ sudo service networkoptix-metavms-mediaserver restart
 You also want to make sure the pre/postprocessor can be used by the NX AI Manager (this is the mostly same command as earlier)
 
 ```shell
-sudo chmod -R a+x /opt/networkoptix-metavms/mediaserver/bin/plugins/nxai_plugin/nxai_manager/postprocessors/
-sudo chmod -R a+x /opt/networkoptix-metavms/mediaserver/bin/plugins/nxai_plugin/nxai_manager/preprocessors/
+sudo chmod -R a+x /opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/postprocessors/
+sudo chmod -R a+x /opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/preprocessors/
 ```
 
 ## Selecting to the pre/postprocessor

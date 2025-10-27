@@ -1,6 +1,31 @@
-cmake_minimum_required(VERSION 3.10.2)
+cmake_minimum_required(VERSION 3.31)
 
 project(nxai-integration-examples)
+
+# Define common installation destinations
+if(WIN32)
+    if(NOT DEFINED CACHE{INSTALL_DEST_POSTPROCESSORS})
+        set(INSTALL_DEST_POSTPROCESSORS "C:\\Program Files\\Network Optix\\Nx Meta\\MediaServer\\plugins\\nx_ai_manager_plugin\\nxai_manager\\postprocessors" CACHE PATH "Installation destination for postprocessors")
+    endif()
+    if(NOT DEFINED CACHE{INSTALL_DEST_PREPROCESSORS})
+        set(INSTALL_DEST_PREPROCESSORS "C:\\Program Files\\Network Optix\\Nx Meta\\MediaServer\\plugins\\nx_ai_manager_plugin\\nxai_manager\\preprocessors" CACHE PATH "Installation destination for preprocessors")
+    endif()
+else()
+    if(NOT DEFINED CACHE{INSTALL_DEST_POSTPROCESSORS})
+        set(INSTALL_DEST_POSTPROCESSORS "/opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/postprocessors/" CACHE PATH "Installation destination for postprocessors")
+    endif()
+    if(NOT DEFINED CACHE{INSTALL_DEST_PREPROCESSORS})
+        set(INSTALL_DEST_PREPROCESSORS "/opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/preprocessors/" CACHE PATH "Installation destination for preprocessors")
+    endif()
+endif()
+
+# Check if the compiler is MSVC
+if(MSVC)
+    # Apply the flag specifically to the 'my_app' target
+    # PRIVATE: The option is only for building this target, not for consumers.
+    add_compile_options(/Zc:preprocessor)
+    link_libraries(ws2_32)
+endif()
 
 # Add Scailable C Utilities for all subprojects
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/nxai-utilities)
@@ -47,36 +72,3 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/preprocessor-python-tensor-example)
 
 # Add Clip Preprocessor Python project
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/preprocessor-python-clip-example)
-
-# Add installation option
-install(TARGETS
-    postprocessor-c-example
-    postprocessor-c-image-example
-    postprocessor-c-raw-example
-    DESTINATION /opt/networkoptix-metavms/mediaserver/bin/plugins/nxai_plugin/nxai_manager/postprocessors/
-)
-
-# Install postprocessors
-install(PROGRAMS
-    ${CMAKE_CURRENT_BINARY_DIR}/postprocessor-python-example/postprocessor-python-example
-    ${CMAKE_CURRENT_BINARY_DIR}/postprocessor-python-image-example/postprocessor-python-image-example
-    ${CMAKE_CURRENT_BINARY_DIR}/postprocessor-python-confidences-example/postprocessor-python-confidences-example
-    ${CMAKE_CURRENT_BINARY_DIR}/postprocessor-python-settings-example/postprocessor-python-settings-example
-    ${CMAKE_CURRENT_BINARY_DIR}/preprocessor-python-image-example/preprocessor-python-image-example
-    ${CMAKE_CURRENT_BINARY_DIR}/preprocessor-python-clip-example/preprocessor-python-clip-example
-    ${CMAKE_CURRENT_BINARY_DIR}/postprocessor-python-noresponse-example/postprocessor-python-noresponse-example
-    ${CMAKE_CURRENT_BINARY_DIR}/postprocessor-python-events-example/postprocessor-python-events-example
-    ${CMAKE_CURRENT_BINARY_DIR}/postprocessor-cloud-inference-example/postprocessor-cloud-inference-example
-    ${CMAKE_CURRENT_BINARY_DIR}/postprocessor-python-clip-example/postprocessor-python-clip-example
-    DESTINATION /opt/networkoptix-metavms/mediaserver/bin/plugins/nxai_plugin/nxai_manager/postprocessors/
-    #DESTINATION ${CMAKE_CURRENT_SOURCE_DIR}/../plugin-testing/TestInputs/ExternalProcessors/x86_64/
-)
-
-# Install preprocessors
-install(PROGRAMS
-    ${CMAKE_CURRENT_BINARY_DIR}/preprocessor-python-image-example/preprocessor-python-image-example
-    ${CMAKE_CURRENT_BINARY_DIR}/preprocessor-python-tensor-example/preprocessor-python-tensor-example
-    ${CMAKE_CURRENT_BINARY_DIR}/preprocessor-python-clip-example/preprocessor-python-clip-example
-    DESTINATION /opt/networkoptix-metavms/mediaserver/bin/plugins/nxai_plugin/nxai_manager/preprocessors/
-    #DESTINATION ${CMAKE_CURRENT_SOURCE_DIR}/../plugin-testing/TestInputs/ExternalProcessors/x86_64/
-)

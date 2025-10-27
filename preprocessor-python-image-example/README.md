@@ -1,7 +1,7 @@
 Preprocessor Python Image Example
 =========================
 
-This example application provides an example on how to create a Python based preprocessor that can be integrated with the NXAI Edge AI Manager.
+This example application provides an example on how to create a Python based preprocessor that can be integrated with the NXAI AI Manager.
 
 This example reads an image from the AI Manager and will mirror the image horizontally. When this example is enabled, you should see the bounding boxes being mirrored with respect to the image.
 
@@ -71,24 +71,32 @@ The header message sent back to the AI Manager should contain all the same field
 
 # How to use
 
-Once compiled, copy the executable to an accessible directory. A convenience directory within the Edge AI Manager installation is created for this purpose at `/opt/networkoptix-metavms/mediaserver/bin/plugins/nxai_plugin/nxai_manager/preprocessors`.
+Once compiled, copy the executable to an accessible directory. A convenience directory within the AI Manager installation is created for this purpose at `/opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/preprocessors`.
 
-It's a good idea to make sure the application and settings file you add is readable and executable by the NXAI Edge AI Manager. This can be achieved by running:
+It's a good idea to make sure the application and settings file you add is readable and executable by the NXAI AI Manager. This can be achieved by running:
 
 ```
-sudo chmod -R 777 /opt/networkoptix-metavms/mediaserver/bin/plugins/nxai_plugin/nxai_manager/preprocessors
+sudo chmod -R 777 /opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/preprocessors
 ```
 
 ## Defining the preprocessor
 
-Create a configuration file at `/opt/networkoptix-metavms/mediaserver/bin/plugins/nxai_plugin/nxai_manager/preprocessors/external_preprocessors.json` and add the details of your preprocessor to the root object of that file. For example: 
+Create a configuration file at
+```
+/opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/preprocessors/external_preprocessors.json
+```
+for Linux, or
+```
+C:\Program Files\Network Optix\Nx Meta\MediaServer\plugins\nxai_plugin\nxai_manager\preprocessors\external_preprocessors.json
+```
+for Windows, and add the details of your preprocessor to the root object of that file. For example: 
 
 ``` json
 {
     "externalPreprocessors": [
         {
             "Name":"Example-Image-Preprocessor",
-            "Command":"/opt/networkoptix-metavms/mediaserver/bin/plugins/nxai_plugin/nxai_manager/preprocessors/preprocessor-python-image-example",
+            "Command":"/opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/preprocessors/preprocessor-python-image-example",
             "SocketPath":"/tmp/example-image-preprocessor.sock",
             "Schedule":"IMAGE",
             "Settings": [
@@ -104,8 +112,31 @@ Create a configuration file at `/opt/networkoptix-metavms/mediaserver/bin/plugin
     ]
 }
 ```
+for Linux, and
+```json
+{
+    "externalPreprocessors": [
+        {
+            "Name":"Example-Image-Preprocessor",
+            "Command":"C:\\Program Files\\Network Optix\\Nx Meta\\MediaServer\\plugins\\nxai_plugin\\nxai_manager\\preprocessors\\preprocessor-python-image-example.exe",
+            "SocketPath":"C:\\Users\\user\\AppData\\Local\\Temp\\example-image-preprocessor.sock",
+            "Schedule":"IMAGE",
+            "Settings": [
+                {
+                    "type": "SwitchButton",
+                    "name": "externalprocessor.mirrorimage",
+                    "caption": "Mirror Image",
+                    "description": "When this switch is active the input image to the AI Manager will be mirrored.",
+                    "defaultValue": true
+                }
+            ]
+        }
+    ]
+}
+```
+For Windows.
 
-This tells the Edge AI Manager about the preprocessor:
+This tells the AI Manager about the preprocessor:
 - **Name** gives the preprocesor a name so it can be selected later
 - **Command** defines how to start the preprocessor
 - **SocketPath** tells the AI Manager where to send data to so the external preprocessor will receive it

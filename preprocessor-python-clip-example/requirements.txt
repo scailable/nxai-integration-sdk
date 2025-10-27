@@ -1,7 +1,7 @@
 nuitka
 pillow
 msgpack
+cargo
 instant_clip_tokenizer
 numpy
 requests
-sysv_ipc
