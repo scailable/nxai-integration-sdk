@@ -88,7 +88,7 @@ def config():
         image_path = configuration.get(
             "inference",
             "image_path",
-            fallback="/opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/postprocessors/face.png",
+            fallback="/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors/face.png",
         )
 
     except Exception as e:

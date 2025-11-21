@@ -90,7 +90,7 @@ git pull --recurse-submodules
 
 ## Configuration of example postprocessor
 
-Create a [configuration file](plugin.example.ini.example) at `/opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/etc/plugin.example.ini` and add some overrides for the configuration.
+Create a [configuration file](plugin.example.ini.example) at `/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/etc/plugin.example.ini` and add some overrides for the configuration.
 
 This plugin only supports changing the debug level between DEBUG, INFO, WARNING, ERROR and CRITICAL
 
@@ -164,11 +164,11 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/postprocessor-python-example)
 
 # Add installation option
 install(TARGETS
-    DESTINATION /opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/postprocessors/
+    DESTINATION /opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors/
 )
 install(PROGRAMS
     ${CMAKE_CURRENT_BINARY_DIR}/postprocessor-python-example/postprocessor-python-example
-    DESTINATION /opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/postprocessors/
+    DESTINATION /opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors/
 )
 ```
 
@@ -185,12 +185,12 @@ make
 
 Once compiled, copy the executable to an accessible directory.
 
-A convenience directory within the AI Manager installation is created for this purpose at `/opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/postprocessors`.
+A convenience directory within the AI Manager installation is created for this purpose at `/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors`.
 
 The application and settings files you add must be readable and executable by the NX AI AI Manager. This can be achieved by running:
 
 ```
-sudo chmod -R 777 /opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/postprocessors
+sudo chmod -R 777 /opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors
 ```
 
 Install the postprocessor automatically with the cmake command, also from within the *build* directory.
@@ -203,7 +203,7 @@ cmake --build . --target install
 
 Create a configuration file at
 ```
-/opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/postprocessors/external_postprocessors.json
+/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors/external_postprocessors.json
 ```
 for Linux, or
 ```
@@ -216,7 +216,7 @@ for Windows, and add the details of your postprocessor to the root object of tha
     "externalPostprocessors": [
         {
             "Name":"Example-Python-Postprocessor",
-            "Command":"/opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/postprocessors/postprocessor-python-example",
+            "Command":"/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors/postprocessor-python-example",
             "SocketPath":"/tmp/python-example-postprocessor.sock",
             "ReceiveInputTensor": false,
             "Objects": [
@@ -235,7 +235,7 @@ For Linux, and
     "externalPostprocessors": [
         {
             "Name":"Example-Python-Postprocessor",
-            "Command":"C:\\Program Files\\Network Optix\\Nx Meta\\MediaServer\\plugins\\nxai_plugin\\nxai_manager\\postprocessors\\postprocessor-python-example.exe",
+            "Command":"C:\\Windows\\System32\\config\\systemprofile\\AppData\\Local\\Network Optix\\Network Optix MetaVMS Media Server\\nx_ai_manager\\nxai_manager\\postprocessors\\postprocessor-python-example.exe",
             "SocketPath":"C:\\Users\\user\\AppData\\Local\\Temp\\python-postprocessor.sock",
             "ReceiveInputTensor": false,
             "Objects": [
@@ -269,7 +269,7 @@ sudo service networkoptix-metavms-mediaserver restart
 You also want to make sure the postprocessor can be used by the NX AI Manager (this is the mostly same command as earlier)
 
 ```shell
-sudo chmod -R a+x /opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/postprocessors/
+sudo chmod -R a+x /opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors/
 ```
 
 ## Selecting to the postprocessor
@@ -281,7 +281,7 @@ If the postprocessor is defined correctly, its name should appear in the list of
 There is an output log where the uploads can be tracked in real time from the server.
 
 ```shell
-tail -f /opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/etc/plugin.example.log
+tail -f /opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/etc/plugin.example.log
 ```
 
 # Licence

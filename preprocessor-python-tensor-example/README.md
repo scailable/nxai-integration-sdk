@@ -49,19 +49,19 @@ The tensor preprocessor is free to add, remove or edit tensors, as long as the t
 
 # How to use
 
-Once compiled, copy the executable to an accessible directory. A convenience directory within the AI Manager installation is created for this purpose at `/opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/preprocessors`.
+Once compiled, copy the executable to an accessible directory. A convenience directory within the AI Manager installation is created for this purpose at `/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/preprocessors`.
 
 It's a good idea to make sure the application and settings file you add is readable and executable by the NXAI AI Manager. This can be achieved by running:
 
 ```
-sudo chmod -R 777 /opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/preprocessors
+sudo chmod -R 777 /opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/preprocessors
 ```
 
 ## Defining the preprocessor
 
 Create a configuration file at
 ```
-/opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/preprocessors/external_preprocessors.json
+/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/preprocessors/external_preprocessors.json
 ```
 for Linux, or
 ```
@@ -74,7 +74,7 @@ for Windows, and add the details of your preprocessor to the root object of that
     "externalPreprocessors": [
         {
             "Name":"Example-Tensor-Preprocessor",
-            "Command":"/opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/preprocessors/preprocessor-python-tensor-example",
+            "Command":"/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/preprocessors/preprocessor-python-tensor-example",
             "SocketPath":"/tmp/example-preprocessor.sock",
             "Schedule":"TENSOR",
             "Settings": [
@@ -99,7 +99,7 @@ for Linux, and
     "externalPreprocessors": [
         {
             "Name":"Example-Tensor-Preprocessor",
-            "Command":"C:\\Program Files\\Network Optix\\Nx Meta\\MediaServer\\plugins\\nxai_plugin\\nxai_manager\\preprocessors\\preprocessor-python-tensor-example.exe",
+            "Command":"C:\\Windows\\System32\\config\\systemprofile\\AppData\\Local\\Network Optix\\Network Optix MetaVMS Media Server\\nx_ai_manager\\nxai_manager\\preprocessors\\preprocessor-python-tensor-example.exe",
             "SocketPath":"C:\\Users\\user\\AppData\\Local\\Temp\\example-tensor-preprocessor.sock",
             "Schedule":"TENSOR",
             "Settings": [

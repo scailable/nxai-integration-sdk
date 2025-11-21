@@ -57,19 +57,19 @@ Some fields depend on which model is assigned. If a model outputs bounding boxes
 
 # How to use
 
-Once compiled, copy the executable to an accessible directory. A convenience directory within the AI Manager installation is created for this purpose at `/opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/postprocessors`.
+Once compiled, copy the executable to an accessible directory. A convenience directory within the AI Manager installation is created for this purpose at `/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors`.
 
 It's a good idea to make sure the application and settings file you add is readable and executable by the NXAI AI Manager. This can be achieved by running:
 
 ```
-sudo chmod -R 777 /opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/postprocessors
+sudo chmod -R 777 /opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors
 ```
 
 ## Defining the postprocessor
 
 Create a configuration file at
 ```
-/opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/postprocessors/external_postprocessors.json
+/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors/external_postprocessors.json
 ```
 for Linux, or
 ```
@@ -82,7 +82,7 @@ for Windows, and add the details of your postprocessor to the root object of tha
     "externalPostprocessors": [
         {
             "Name":"Example-Raw-Postprocessor",
-            "Command":"/opt/networkoptix-metavms/mediaserver/bin/plugins/nx_ai_manager_plugin/nxai_manager/postprocessors/postprocessor-c-raw-example",
+            "Command":"/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors/postprocessor-c-raw-example",
             "SocketPath":"/tmp/example-raw-postprocessor.sock",
             "ReceiveInputTensor": false,
             "ReceiveBinaryData": true,
@@ -102,7 +102,7 @@ For Linux, and
     "externalPostprocessors": [
         {
             "Name":"Example-Raw-Postprocessor",
-            "Command":"C:\\Program Files\\Network Optix\\Nx Meta\\MediaServer\\plugins\\nxai_plugin\\nxai_manager\\postprocessors\\postprocessor-c-raw-example.exe",
+            "Command":"C:\\Windows\\System32\\config\\systemprofile\\AppData\\Local\\Network Optix\\Network Optix MetaVMS Media Server\\nx_ai_manager\\nxai_manager\\postprocessors\\postprocessor-c-raw-example.exe",
             "SocketPath":"C:\\Users\\user\\AppData\\Local\\Temp\\example-raw-postprocessor.sock",
             "ReceiveInputTensor": false,
             "ReceiveBinaryData": true,
