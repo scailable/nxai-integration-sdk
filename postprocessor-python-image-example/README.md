@@ -113,12 +113,28 @@ When the `auto_generator` is set to `False` images will be uploaded according to
 
 Install the needed dependencies
 
+On Linux:
+
 ```shell
 sudo apt install cmake
 sudo apt install g++
 sudo apt install python3-pip
 sudo apt install patchelf
 ```
+
+On Windows:
+
+```
+Python 3.10+
+Visual Studio 2022 with Desktop development with C++ workload
+```
+Enable the following options in Visual Studio:
+```
+MSVC v143
+Windows 10/11 SDK
+CMake tools for Windows
+```
+
 
 Change into the directory created for the project if you're not already there.
 
@@ -176,9 +192,17 @@ install(PROGRAMS
 
 Build the postprocessor, while in the created *build* directory. This may take a while, depending on the speed of your system.
 
+On Linux:
+
 ```shell
 cmake ..
 make
+```
+On Windows:
+
+```shell
+cmake .. -G "Visual Studio 17 2022" -A x64
+cmake --build . --config Release
 ```
 
 ## Install the postprocessor
