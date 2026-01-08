@@ -156,8 +156,8 @@ cmake_minimum_required(VERSION 3.10.2)
 project(sclbl-integration-examples)
 
 # Add Scailable C Utilities for all subprojects
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/sclbl-utilities)
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/sclbl-utilities/include)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/nxai-utilities)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/nxai-utilities/include)
 
 # Add Image Postprocessor Python project
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/postprocessor-python-image-example)
