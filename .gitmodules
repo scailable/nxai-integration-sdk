@@ -1,5 +1,5 @@
 [submodule "nxai-utilities"]
 path = nxai-utilities
-url = https://github.com/scailable/nxai-utilities.git
+url = git@gitlab.nxvms.dev:ai/nxai-utilities.git
 branch = public
 update = merge

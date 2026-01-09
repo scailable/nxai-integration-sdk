@@ -73,7 +73,7 @@ Create a configuration file at
 ```
 for Linux, or
 ```
-C:\Program Files\Network Optix\Nx Meta\MediaServer\plugins\nxai_plugin\nxai_manager\postprocessors\external_postprocessors.json
+C:\\Windows\\System32\\config\\systemprofile\\AppData\\Local\\Network Optix\\Network Optix MetaVMS Media Server\\nx_ai_manager\\nxai_manager\postprocessors\external_postprocessors.json
 ```
 for Windows, and add the details of your postprocessor to the root object of that file. For example: 
 
