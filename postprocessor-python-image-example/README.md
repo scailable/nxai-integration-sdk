@@ -101,14 +101,6 @@ For example:
 debug_level=DEBUG
 ```
 
-## Use the interval based upload
-
-When the `auto_generator` is set to `True` images will be uploaded according to the value in `auto_generator_every_seconds`
-
-## Use the confidence threshold based upload
-
-When the `auto_generator` is set to `False` images will be uploaded according to the value in `p_value`
-
 ## Preparation of dependencies
 
 Install the needed dependencies
