@@ -57,7 +57,7 @@ Because the different pre/postprocessors must be compiled for each hardware arch
 Change into the directory created for the project if you're not already there.
 
 ```shell
-cd sclbl-integration-sdk/
+cd nxai-integration-sdk/
 ```
 
 Prepare the *build* directory in the project directory, and switch to the build directory.
