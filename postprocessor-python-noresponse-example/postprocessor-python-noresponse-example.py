@@ -79,15 +79,15 @@ def main():
     # Start socket listener to receive messages from NXAI runtime
     server = nxai_communication_utils.SocketListener(Postprocessor_Socket_Path)
 
-    logging.debug("Starting main" + str(Postprocessor_Socket_Path))
+    logger.debug("Starting main" + str(Postprocessor_Socket_Path))
     # Wait for messages in a loop
     while True:
         # Wait for input message from runtime
-        logging.debug("Starting loop")
+        logger.debug("Starting loop")
 
         try:
             input_message, connection = server.accept()
-            logging.debug("Received input message")
+            logger.debug("Received input message")
             formatted_input_message = pformat(input_message)
             logger.debug(f"Input message: :\n\n{formatted_input_message}\n\n")
         except nxai_communication_utils.SocketTimeout:
@@ -123,4 +123,4 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as e:
-        logging.error(e, exc_info=True)
+        logger.error(e, exc_info=True)

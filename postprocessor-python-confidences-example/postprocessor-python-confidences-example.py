@@ -103,7 +103,7 @@ def main():
 
         # Use pformat to format the deep object
         # formatted_unpacked_object = pformat(input_object)
-        # logging.debug(f'Unpacked:\n\n{formatted_unpacked_object}\n\n')
+        # logger.debug(f'Unpacked:\n\n{formatted_unpacked_object}\n\n')
 
         # Add the confidence of each object as attributes
         for _, class_data in input_object["ObjectsMetaData"].items():

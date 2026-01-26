@@ -213,9 +213,9 @@ if __name__ == "__main__":
         logger.error(e, exc_info=True)
 
     if rekognition_client:
-        logging.debug("AWS Session started")
+        logger.debug("AWS Session started")
     else:
-        logging.error("AWS session failed")
+        logger.error("AWS session failed")
         exit()
 
     # Parse input arguments

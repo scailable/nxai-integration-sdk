@@ -180,7 +180,7 @@ def main():
 
         upload_sample = False
 
-        logging.debug("Wait for message " + str(counter))
+        logger.debug("Wait for message " + str(counter))
         # Wait for input message from runtime
         try:
             connection, input_message = server.accept()
@@ -191,7 +191,7 @@ def main():
 
         counter = counter + 1
 
-        logging.debug("Message " + str(counter) + "received")
+        logger.debug("Message " + str(counter) + "received")
 
         # Parse input message
         parsed_response = msgpack.unpackb(input_message)
@@ -210,10 +210,10 @@ def main():
                 parsed_response["Outputs"][key] = list(struct.unpack("b" * output_sizes[i], value))
 
         if logging.getLogger().isEnabledFor(logging.DEBUG):
-            logging.debug("Message " + str(counter) + " parsed")
+            logger.debug("Message " + str(counter) + " parsed")
             # Use pformat to format the deep object
             formatted_object = pformat(parsed_response)
-            logging.debug(f"Parsed response:\n\n{formatted_object}\n\n")
+            logger.debug(f"Parsed response:\n\n{formatted_object}\n\n")
 
         current_time = time.time()
 
@@ -238,11 +238,11 @@ def main():
             # Check if any of the values are below p_value and earmark result for retrieval
             for value in parsed_values:
                 if value < p_value:
-                    logging.debug("Parsed value: %.8f", value)
+                    logger.debug("Parsed value: %.8f", value)
                     upload_sample = True
 
         if upload_sample:
-            logging.debug("uploading sample")
+            logger.debug("uploading sample")
             # Parse image information
             image_header = msgpack.unpackb(image_header)
 
@@ -257,7 +257,7 @@ def main():
             if len(samples_buffer) >= samples_buffer_flush_size:
                 send_samples_buffer()
         else:
-            logging.debug("skipping sample")
+            logger.debug("skipping sample")
 
         if return_data:
             # Create msgpack formatted message
@@ -280,13 +280,13 @@ if __name__ == "__main__":
     config()
 
     logger.info("Initializing example plugin")
-    logging.debug("Input parameters: " + str(sys.argv))
+    logger.debug("Input parameters: " + str(sys.argv))
 
     if edge_impulse_api_key == default_edge_impulse_api_key:
-        logging.error("Edge Impulse Key is not set yet", exc_info=True)
+        logger.error("Edge Impulse Key is not set yet", exc_info=True)
         exit()
     else:
-        logging.debug("Edge Impulse Key: " + edge_impulse_api_key)
+        logger.debug("Edge Impulse Key: " + edge_impulse_api_key)
 
     # Parse input arguments
     if len(sys.argv) > 1:
@@ -296,4 +296,4 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as e:
-        logging.error(e, exc_info=True)
+        logger.error(e, exc_info=True)

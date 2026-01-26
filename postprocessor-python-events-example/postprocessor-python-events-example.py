@@ -102,7 +102,7 @@ def main():
 
         # Use pformat to format the deep object
         # formatted_unpacked_object = pformat(input_object)
-        # logging.debug(f'Unpacked:\n\n{formatted_unpacked_object}\n\n')
+        # logger.debug(f'Unpacked:\n\n{formatted_unpacked_object}\n\n')
 
         description_string = "\nThere are no objects in the frame."
         objects_detected = False
