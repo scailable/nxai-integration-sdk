@@ -231,7 +231,7 @@ Create a configuration file at
 ```
 for Linux, or
 ```
-C:\\Windows\\System32\\config\\systemprofile\\AppData\\Local\\Network Optix\\Network Optix MetaVMS Media Server\\nx_ai_manager\\nxai_manager\postprocessors\external_postprocessors.json
+C:\Windows\System32\config\systemprofile\AppData\Local\Network Optix\Network Optix MetaVMS Media Server\nx_ai_manager\nxai_manager\postprocessors\external_postprocessors.json
 ```
 for Windows, and add the details of your postprocessor to the root object of that file. For example: 
 
@@ -260,7 +260,7 @@ For Linux, and
         {
             "Name":"Python-Image-Postprocessor",
             "Command":"C:\\Windows\\System32\\config\\systemprofile\\AppData\\Local\\Network Optix\\Network Optix MetaVMS Media Server\\nx_ai_manager\\nxai_manager\\postprocessors\\postprocessor-python-image-example.exe",
-            "SocketPath":"C:\\Users\\user\\AppData\\Local\\Temp\\python-image-postprocessor.sock",
+            "SocketPath":"C:\\Windows\\Temp\\python-image-postprocessor.sock",
             "ReceiveInputTensor": true,
             "Objects": [
                 {

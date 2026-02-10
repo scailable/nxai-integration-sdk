@@ -209,7 +209,7 @@ Create a configuration file at
 ```
 for Linux, or
 ```
-C:\\Windows\\System32\\config\\systemprofile\\AppData\\Local\\Network Optix\\Network Optix MetaVMS Media Server\\nx_ai_manager\\nxai_manager\postprocessors\external_postprocessors.json
+C:\Windows\System32\config\systemprofile\AppData\Local\Network Optix\Network Optix MetaVMS Media Server\nx_ai_manager\nxai_manager\postprocessors\external_postprocessors.json
 ```
 for Windows, and add the details of your postprocessor to the root object of that file. For example: 
 
@@ -233,7 +233,7 @@ For Linux, and
         {
             "Name":"Example-Postprocessor-Confidences",
             "Command":"C:\\Windows\\System32\\config\\systemprofile\\AppData\\Local\\Network Optix\\Network Optix MetaVMS Media Server\\nx_ai_manager\\nxai_manager\\postprocessors\\postprocessor-python-confidences-example.exe",
-            "SocketPath":"C:\\Users\\user\\AppData\\Local\\Temp\\example-confidences-postprocessor.sock",
+            "SocketPath":"C:\\Windows\\Temp\\example-confidences-postprocessor.sock",
             "ReceiveInputTensor": false,
             "ReceiveConfidenceData": true
         }
