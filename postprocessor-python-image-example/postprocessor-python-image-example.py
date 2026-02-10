@@ -15,28 +15,40 @@ CONFIG_FILE = os.path.join(script_location, "..", "etc", "plugin.image.ini")
 
 LOG_FILE = os.path.join(script_location, "..", "etc", "plugin.image.log")
 
-# Initialize plugin and logging, script makes use of INFO and DEBUG levels
+# --- LOGGING SETUP ---
+
+# 1. Create a logger
+logger = logging.getLogger(__name__)
+# The Logger level must be DEBUG so it passes all messages to the handlers
+logger.setLevel(logging.DEBUG) 
+
+# 2. Create the Format
+formatter = logging.Formatter("%(asctime)s - %(levelname)s - example - %(message)s")
+
+# 3. Stdout Handler: Always DEBUG
 handler_stream = logging.StreamHandler(sys.stdout)
 handler_stream.setLevel(logging.DEBUG)
+handler_stream.setFormatter(formatter)
+
+# 4. File Handler: Default to INFO (will be updated by config)
 handler_file = logging.FileHandler(filename=LOG_FILE, mode="w")
 handler_file.setLevel(logging.INFO)
+handler_file.setFormatter(formatter)
 
-logging.basicConfig(format="%(asctime)s - %(levelname)s - example - %(message)s", handlers=[handler_stream, handler_file])
+# 5. Add handlers to the logger
+logger.addHandler(handler_stream)
+logger.addHandler(handler_file)
+
+# ---------------------
 
 import nxai_communication_utils
 
-# The name of the postprocessor.
-# This is used to match the definition of the postprocessor with routing.
+# The name of the postprocessor...
 Postprocessor_Name = "Python-Image-Example-Postprocessor"
-
-# The socket this postprocessor will listen on.
-# This is always given as the first argument when the process is started
-# But it can be manually defined as well, as long as it is the same as the socket path in the runtime settings
 Postprocessor_Socket_Path = os.path.join(tempfile.gettempdir(),"python-image-postprocessor.sock")
 
 global shared_memory
 shared_memory = None
-
 
 def parse_image_from_shm(shm_key: int, width: int, height: int, channels: int):
     global shared_memory
@@ -58,8 +70,9 @@ def config():
         configuration = configparser.ConfigParser()
         configuration.read(CONFIG_FILE)
 
-        configured_log_level = configuration.get("common", "debug_level", fallback="INFO")
-        set_log_level(configured_log_level)
+        # Get log level from config, fallback to INFO
+        configured_log_level = configuration.get("common", "debug_level", fallback="INFO").upper()
+        set_file_log_level(configured_log_level)
 
         for section in configuration.sections():
             logger.info("config section: " + section)
@@ -71,13 +84,21 @@ def config():
 
     logger.debug("Read configuration done")
 
-
-def set_log_level(level):
+def set_file_log_level(level):
+    """
+    Updates ONLY the file handler level. 
+    Stdout remains at DEBUG because its handler isn't touched.
+    """
     try:
-        logger.setLevel(level)
+        # Convert string level (e.g., "DEBUG") to logging constant (10)
+        numeric_level = getattr(logging, level.upper(), None)
+        if not isinstance(numeric_level, int):
+            raise ValueError(f'Invalid log level: {level}')
+        
+        handler_file.setLevel(numeric_level)
+        logger.info(f"File logging level set to: {level}")
     except Exception as e:
-        logger.error(e, exc_info=True)
-
+        logger.error(f"Failed to set log level: {e}", exc_info=True)
 
 def main():
     # Start socket listener to receive messages from NXAI runtime
@@ -147,12 +168,8 @@ def main():
         connection.send(output_message)
         connection.close()
 
-
 if __name__ == "__main__":
-    ## initialize the logger
-    logger = logging.getLogger(__name__)
-
-    ## read configuration file if it's available
+    # 1. Read configuration first to set FileHandler level
     config()
 
     logger.info("Initializing image plugin")
