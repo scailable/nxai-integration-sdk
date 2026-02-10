@@ -4,6 +4,7 @@ import logging
 import configparser
 from pprint import pformat
 import msgpack
+import tempfile
 
 # Add the nxai-utilities python utilities
 script_location = os.path.dirname(sys.argv[0])
@@ -31,7 +32,7 @@ Postprocessor_Name = "Python-Image-Example-Postprocessor"
 # The socket this postprocessor will listen on.
 # This is always given as the first argument when the process is started
 # But it can be manually defined as well, as long as it is the same as the socket path in the runtime settings
-Postprocessor_Socket_Path = "/tmp/python-image-postprocessor.sock"
+Postprocessor_Socket_Path = os.path.join(tempfile.gettempdir(),"python-image-postprocessor.sock")
 
 global shared_memory
 shared_memory = None

@@ -36,7 +36,8 @@ Postprocessor_Name = "Python-Example-Setting-Postprocessor"
 # The socket this postprocessor will listen on.
 # This is always given as the first argument when the process is started
 # But it can be manually defined as well, as long as it is the same as the socket path in the runtime settings
-Postprocessor_Socket_Path = "/tmp/python-example-settings-postprocessor.sock"
+import tempfile
+Postprocessor_Socket_Path = os.path.join(tempfile.gettempdir(),"python-example-settings-postprocessor.sock")
 
 # Data Types
 # 1:  //FLOAT
