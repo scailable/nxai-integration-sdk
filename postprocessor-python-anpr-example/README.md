@@ -1,4 +1,4 @@
-# Postprocessor Python Stitch OCR Result
+# Postprocessor Python ANPR Example
 
 This postprocessor is designed to work with OCR models (like CCT - Compact Convolutional Transformer) that output raw character logits. It converts these logits into readable text and stitches the results back into the metadata of the original objects.
 
@@ -6,13 +6,13 @@ This postprocessor is designed to work with OCR models (like CCT - Compact Convo
 
 The postprocessor handles two types of messages in a high-performance asynchronous flow:
 1. **OCR Messages**: Receives raw logits (e.g., 9×37 float32 tensor), decodes them into text using argmax, and stores the result in a local cache.
-2. **Detector Messages**: Receives object detections, retrieves the latest decoded OCR text from the cache for each object ID, and updates the message metadata with `recognized_text` and `confidence` attributes.
+2. **Detector Messages**: Receives object detections, retrieves the latest decoded OCR text from the cache for each object ID, and updates the message metadata with `License Plate Text` and `Confidence` attributes.
 
 ## Key Features
 
 - **Asynchronous Processing**: Uses a worker pool for OCR decoding to prevent blocking the main communication loop.
 - **Caching Logic**: Implements an `OcrCache` to store recognition results, allowing immediate responses to detector messages with the most recent OCR data.
-- **Robust Configuration**: Optional INI at `../etc/plugin.stitch-ocr-result.ini`; first CLI argument is always the socket path (same as other postprocessors).
+- **Robust Configuration**: Optional INI at `../etc/plugin.anpr.ini`; first CLI argument is always the socket path (same as other postprocessors).
 - **Nuitka Integration**: Fully compatible with Nuitka for compiling into a high-performance standalone binary.
 
 ## Model Output Format
@@ -55,13 +55,13 @@ This postprocessor is integrated into the SDK's CMake build system.
 mkdir -p build
 cd build
 cmake ..
-cmake --build . --target postprocessor-python-stitch-ocr-result
+cmake --build . --target postprocessor-python-anpr-example
 ```
 
-**Note**: The `cmake --build` command is cross-platform and works on both Linux and Windows. On Linux, you can alternatively use `make postprocessor-python-stitch-ocr-result` if preferred.
+**Note**: The `cmake --build` command is cross-platform and works on both Linux and Windows. On Linux, you can alternatively use `make postprocessor-python-anpr-example` if preferred.
 
 The compiled standalone binary will be located at:
-`build/postprocessor-python-stitch-ocr-result/postprocessor-python-stitch-ocr-result`
+`build/postprocessor-python-anpr-example/postprocessor-python-anpr-example`
 
 ### Installation
 
@@ -69,11 +69,11 @@ Once compiled, install the postprocessor and its dependencies to the AI Manager'
 
 ```bash
 # From the build directory
-cmake --install . --component postprocessor-python-stitch-ocr-result
+cmake --install . --component postprocessor-python-anpr-example
 ```
 
 This command installs:
-- The postprocessor binary: `postprocessor-python-stitch-ocr-result` (or `.exe` on Windows)
+- The postprocessor binary: `postprocessor-python-anpr-example` (or `.exe` on Windows)
 - The shared library required for communication:
   - **Linux**: `libnxai-c-utilities-shared.so`
   - **Windows**: `nxai-c-utilities-shared.dll`
@@ -94,18 +94,18 @@ sudo chmod -R a+x /opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_m
 
 ## Configuration
 
-The postprocessor can be started with the **socket path as an optional first argument** (e.g., `postprocessor-python-stitch-ocr-result.exe C:\path\to\socket.sock`). Additional configuration options are read from a fixed path: `../etc/plugin.stitch-ocr-result.ini` (relative to the postprocessor binary). If the socket path is provided as the first argument, it takes priority over the value set in the .ini configuration file. Copy the example configuration file to the AI Manager's configuration directory:
+The postprocessor can be started with the **socket path as an optional first argument** (e.g., `postprocessor-python-anpr-example.exe C:\path\to\socket.sock`). Additional configuration options are read from a fixed path: `../etc/plugin.anpr.ini` (relative to the postprocessor binary). If the socket path is provided as the first argument, it takes priority over the value set in the .ini configuration file. Copy the example configuration file to the AI Manager's configuration directory:
 
 **Linux:**
 ```bash
-cp postprocessor-python-stitch-ocr-result/plugin.stitch-ocr-result.ini.example \
-   /opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/etc/plugin.stitch-ocr-result.ini
+cp postprocessor-python-anpr-example/plugin.anpr.ini.example \
+   /opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/etc/plugin.anpr.ini
 ```
 
 **Windows:**
 Copy the file to:
 ```
-C:\Windows\System32\config\systemprofile\AppData\Local\Network Optix\Network Optix MetaVMS Media Server\nx_ai_manager\nxai_manager\etc\plugin.stitch-ocr-result.ini
+C:\Windows\System32\config\systemprofile\AppData\Local\Network Optix\Network Optix MetaVMS Media Server\nx_ai_manager\nxai_manager\etc\plugin.anpr.ini
 ```
 
 ### Configuration Options (`.ini`)
@@ -167,7 +167,7 @@ When a **Detector Message** (containing bounding boxes) is received, the postpro
   "ObjectsMetaData": {
     "license_plate": {
       "ObjectIDs": ["uuid-1234"],
-      "AttributeKeys": [["recognized_text", "confidence"]],
+      "AttributeKeys": [["License Plate Text", "Confidence"]],
       "AttributeValues": [["ABC1234", "0.985"]]
     }
   }
@@ -183,9 +183,9 @@ Add the postprocessor to the `externalPostprocessors` section in `external_postp
 **Linux:**
 ```json
 {
-  "Name": "Stitch-OCR-Result",
-  "Command": "/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors/postprocessor-python-stitch-ocr-result",
-  "SocketPath": "/tmp/postprocessor-stitch-ocr-result.sock",
+  "Name": "ANPR-Example",
+  "Command": "/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors/postprocessor-python-anpr-example",
+  "SocketPath": "/tmp/postprocessor-anpr-example.sock",
   "ReceiveBinaryData": true
 }
 ```
@@ -193,9 +193,9 @@ Add the postprocessor to the `externalPostprocessors` section in `external_postp
 **Windows:**
 ```json
 {
-  "Name": "Stitch-OCR-Result",
-  "Command": "C:\\Windows\\System32\\config\\systemprofile\\AppData\\Local\\Network Optix\\Network Optix MetaVMS Media Server\\nx_ai_manager\\nxai_manager\\postprocessors\\postprocessor-python-stitch-ocr-result.exe",
-  "SocketPath": "C:\\Windows\\SystemTemp\\postprocessor-stitch-ocr-result.sock",
+  "Name": "ANPR-Example",
+  "Command": "C:\\Windows\\System32\\config\\systemprofile\\AppData\\Local\\Network Optix\\Network Optix MetaVMS Media Server\\nx_ai_manager\\nxai_manager\\postprocessors\\postprocessor-python-anpr-example.exe",
+  "SocketPath": "C:\\Windows\\SystemTemp\\postprocessor-anpr-example.sock",
   "ReceiveBinaryData": true
 }
 
@@ -221,23 +221,23 @@ The postprocessor writes logs to the file specified in the configuration. To vie
 
 **Linux:**
 ```bash
-tail -f /opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/etc/plugin.stitch-ocr-result.log
+tail -f /opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/etc/plugin.anpr.log
 ```
 
 **Windows:**
 Open the log file in a text editor or use PowerShell:
 ```powershell
-Get-Content "C:\Windows\System32\config\systemprofile\AppData\Local\Network Optix\Network Optix MetaVMS Media Server\nx_ai_manager\nxai_manager\etc\plugin.stitch-ocr-result.log" -Wait -Tail 50
+Get-Content "C:\Windows\System32\config\systemprofile\AppData\Local\Network Optix\Network Optix MetaVMS Media Server\nx_ai_manager\nxai_manager\etc\plugin.anpr.log" -Wait -Tail 50
 ```
 
-Or check the log file path configured in your `plugin.stitch-ocr-result.ini` file.
+Or check the log file path configured in your `plugin.anpr.ini` file.
 
 ## Development and Testing
 
-A comprehensive test suite is provided in `test_postprocessor_python_stitch_ocr_result.py`. To run tests:
+A comprehensive test suite is provided in `test_postprocessor_python_anpr_example.py`. To run tests:
 
 ```bash
-python3 -m unittest test_postprocessor_python_stitch_ocr_result.py
+python3 -m unittest test_postprocessor_python_anpr_example.py
 ```
 
 ## Dependencies

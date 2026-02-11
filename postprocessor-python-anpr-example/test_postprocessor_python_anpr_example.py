@@ -32,11 +32,11 @@ with patch('logging.FileHandler') as _file_handler:
     _file_handler.return_value = _logging.NullHandler()
     import importlib.util
     spec = importlib.util.spec_from_file_location(
-        "postprocessor_python_stitch_ocr_result",
-        os.path.join(script_dir, "postprocessor-python-stitch-ocr-result.py")
+        "postprocessor_python_anpr_example",
+        os.path.join(script_dir, "postprocessor-python-anpr-example.py")
     )
     module = importlib.util.module_from_spec(spec)
-    sys.modules["postprocessor_python_stitch_ocr_result"] = module
+    sys.modules["postprocessor_python_anpr_example"] = module
     # Ensure nxai_communication_utils is available in the module's namespace
     module.nxai_communication_utils = mock_comm
     spec.loader.exec_module(module)
@@ -127,8 +127,8 @@ class TestDetectorMetadata(unittest.TestCase):
         success = msg.update_metadata("obj-1", "TEXT", 0.95)
         self.assertTrue(success)
         meta = msg.objects_metadata["car"]
-        self.assertEqual(meta["AttributeValues"][0][meta["AttributeKeys"][0].index("recognized_text")], "TEXT")
-        self.assertEqual(meta["AttributeValues"][0][meta["AttributeKeys"][0].index("confidence")], "0.95")
+        self.assertEqual(meta["AttributeValues"][0][meta["AttributeKeys"][0].index("License Plate Text")], "TEXT")
+        self.assertEqual(meta["AttributeValues"][0][meta["AttributeKeys"][0].index("Confidence")], "0.95")
 
     def test_multiple_bboxes_normalization(self):
         """Test normalization when some boxes have IDs and some don't"""

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Postprocessor Python Stitch OCR Result Example
+Postprocessor Python ANPR Example
 
 This example postprocessor receives OCR results from the CCT model (NxM float32 logits)
 and converts them to readable text by finding argmax for each character position.
@@ -190,26 +190,26 @@ class DetectorMessage(InferenceMessage):
             if not isinstance(vals[idx], list):
                 vals[idx] = list(vals[idx]) if vals[idx] else []
 
-            # Update recognized_text
-            if "recognized_text" in keys[idx]:
-                k_idx = keys[idx].index("recognized_text")
+            # Update License Plate Text
+            if "License Plate Text" in keys[idx]:
+                k_idx = keys[idx].index("License Plate Text")
                 if len(vals[idx]) > k_idx:
                     vals[idx][k_idx] = recognized_text
                 else:
                     vals[idx].append(recognized_text)
             else:
-                keys[idx].append("recognized_text")
+                keys[idx].append("License Plate Text")
                 vals[idx].append(recognized_text)
 
-            # Update confidence
-            if "confidence" in keys[idx]:
-                c_idx = keys[idx].index("confidence")
+            # Update Confidence
+            if "Confidence" in keys[idx]:
+                c_idx = keys[idx].index("Confidence")
                 if len(vals[idx]) > c_idx:
                     vals[idx][c_idx] = str(confidence)
                 else:
                     vals[idx].append(str(confidence))
             else:
-                keys[idx].append("confidence")
+                keys[idx].append("Confidence")
                 vals[idx].append(str(confidence))
 
             return True
@@ -420,15 +420,15 @@ class OcrCache:
 
 
 def _config():
-    """Read configuration from optional INI at fixed path (../etc/plugin.stitch-ocr-result.ini)."""
+    """Read configuration from optional INI at fixed path (../etc/plugin.anpr.ini)."""
     script_location = os.path.dirname(sys.argv[0])
-    config_file = os.path.join(script_location, "..", "etc", "plugin.stitch-ocr-result.ini")
+    config_file = os.path.join(script_location, "..", "etc", "plugin.anpr.ini")
     temp_dir = Path(tempfile.gettempdir())
     settings = {
         "log_level": "DEBUG",
         "ocr_worker_count": max(1, min(4, os.cpu_count() or 1)),
-        "socket_path": str(temp_dir / "postprocessor-stitch-ocr-result.sock"),
-        "log_file": str(temp_dir / "postprocessor-stitch-ocr-result.log"),
+        "socket_path": str(temp_dir / "postprocessor-anpr-example.sock"),
+        "log_file": str(temp_dir / "postprocessor-anpr-example.log"),
         "ocr_output_name": "Identity:0",
         "nxai_utilities_path": os.path.join(script_location, "..", "nxai-utilities", "python-utilities"),
     }
@@ -463,7 +463,7 @@ def _setup_logging(level_str: str, log_file: str):
     numeric_level = getattr(logging, level_str.upper(), logging.INFO)
     logging.basicConfig(
         level=numeric_level,
-        format="%(asctime)s - %(levelname)s - stitch-ocr-result - %(message)s",
+        format="%(asctime)s - %(levelname)s - anpr-example - %(message)s",
         handlers=[
             logging.StreamHandler(sys.stdout),
             logging.FileHandler(log_file, mode="w")
@@ -475,7 +475,7 @@ def _setup_logging(level_str: str, log_file: str):
 
 def main(settings, engine, ocr_pool=None):
     """Main postprocessor loop"""
-    logger.info("=== STARTING STITCH OCR POSTPROCESSOR ===")
+    logger.info("=== STARTING ANPR POSTPROCESSOR ===")
     logger.info("Socket path: %s", settings["socket_path"])
     logger.info("Current working directory: %s", os.getcwd())
     server = nxai_communication_utils.SocketListener(settings["socket_path"])

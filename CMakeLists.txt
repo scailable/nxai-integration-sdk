@@ -46,8 +46,8 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/postprocessor-python-example)
 ## Add Image Postprocessor Python project
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/postprocessor-python-image-example)
 
-## Add Stitch OCR Result Postprocessor Python project
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/postprocessor-python-stitch-ocr-result)
+## Add ANPR Example Postprocessor Python project
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/postprocessor-python-anpr-example)
 
 ## Add Confidence Postprocessor Python project
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/postprocessor-python-confidences-example)

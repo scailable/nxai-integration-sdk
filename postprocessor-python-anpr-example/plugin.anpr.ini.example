@@ -2,9 +2,9 @@
 # Logging level (DEBUG, INFO, WARNING, ERROR)
 log_level = DEBUG
 # Path to Unix socket for communication with AI Manager
-socket_path = /tmp/postprocessor-stitch-ocr-result.sock
+socket_path = /tmp/postprocessor-anpr-example.sock
 # Path to the log file
-log_file = /tmp/postprocessor-stitch-ocr-result.log
+log_file = /tmp/postprocessor-anpr-example.log
 # Path to nxai-utilities (autodetected if not set)
 # nxai_utilities_path = ../nxai-utilities/python-utilities
 

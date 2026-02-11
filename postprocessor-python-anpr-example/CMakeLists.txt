@@ -1,5 +1,5 @@
 # Add target to build everything at once
-set(PROCESSOR_NAME "postprocessor-python-stitch-ocr-result")
+set(PROCESSOR_NAME "postprocessor-python-anpr-example")
 
 # Create virtual environment in build directory
 find_package(Python REQUIRED)
