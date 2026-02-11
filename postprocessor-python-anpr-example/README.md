@@ -168,7 +168,7 @@ When a **Detector Message** (containing bounding boxes) is received, the postpro
     "license_plate": {
       "ObjectIDs": ["uuid-1234"],
       "AttributeKeys": [["License Plate Text", "Confidence"]],
-      "AttributeValues": [["ABC1234", "0.985"]]
+      "AttributeValues": [["ABC1234", "0.9850"]]
     }
   }
 }

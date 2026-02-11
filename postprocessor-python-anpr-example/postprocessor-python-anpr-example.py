@@ -201,16 +201,17 @@ class DetectorMessage(InferenceMessage):
                 keys[idx].append("License Plate Text")
                 vals[idx].append(recognized_text)
 
-            # Update Confidence
+            # Update Confidence (formatted to 4 decimal places)
+            confidence_str = f"{float(confidence):.4f}"
             if "Confidence" in keys[idx]:
                 c_idx = keys[idx].index("Confidence")
                 if len(vals[idx]) > c_idx:
-                    vals[idx][c_idx] = str(confidence)
+                    vals[idx][c_idx] = confidence_str
                 else:
-                    vals[idx].append(str(confidence))
+                    vals[idx].append(confidence_str)
             else:
                 keys[idx].append("Confidence")
-                vals[idx].append(str(confidence))
+                vals[idx].append(confidence_str)
 
             return True
         return False

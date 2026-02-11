@@ -128,7 +128,7 @@ class TestDetectorMetadata(unittest.TestCase):
         self.assertTrue(success)
         meta = msg.objects_metadata["car"]
         self.assertEqual(meta["AttributeValues"][0][meta["AttributeKeys"][0].index("License Plate Text")], "TEXT")
-        self.assertEqual(meta["AttributeValues"][0][meta["AttributeKeys"][0].index("Confidence")], "0.95")
+        self.assertEqual(meta["AttributeValues"][0][meta["AttributeKeys"][0].index("Confidence")], "0.9500")
 
     def test_multiple_bboxes_normalization(self):
         """Test normalization when some boxes have IDs and some don't"""
