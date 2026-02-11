@@ -419,9 +419,10 @@ class OcrCache:
         return self._ocr_results_cache.get(object_id)
 
 
-def _config(config_path=None):
-    """Read configuration from file"""
+def _config():
+    """Read configuration from optional INI at fixed path (../etc/plugin.stitch-ocr-result.ini)."""
     script_location = os.path.dirname(sys.argv[0])
+    config_file = os.path.join(script_location, "..", "etc", "plugin.stitch-ocr-result.ini")
     temp_dir = Path(tempfile.gettempdir())
     settings = {
         "log_level": "DEBUG",
@@ -431,14 +432,15 @@ def _config(config_path=None):
         "ocr_output_name": "Identity:0",
         "nxai_utilities_path": os.path.join(script_location, "..", "nxai-utilities", "python-utilities"),
     }
-    if config_path is None:
+    if not os.path.exists(config_file):
+        logger.info("Configuration file %s not found, using default settings", config_file)
         return settings
-    logger.info("Reading configuration from: %s", config_path)
+    configuration = configparser.ConfigParser()
+    logger.info("Reading configuration from: %s", config_file)
     try:
-        configuration = configparser.ConfigParser()
-        configuration.read(config_path)
+        configuration.read(config_file)
     except Exception as e:
-        logger.error("Failed to read configuration: %s", e)
+        logger.error("Failed to read configuration file %s: %s. Using default settings.", config_file, e)
         return settings
     if "common" in configuration:
         settings["log_level"] = configuration.get("common", "log_level", fallback=settings["log_level"])
@@ -509,10 +511,11 @@ def main(settings, engine, ocr_pool=None):
 
 
 if __name__ == "__main__":
-    config_path = sys.argv[1] if len(sys.argv) > 1 else None
-    settings = _config(config_path)
+    settings = _config()
 
     _setup_logging(settings["log_level"], settings["log_file"])
+    if len(sys.argv) > 1:
+        settings["socket_path"] = sys.argv[1]
     logger.debug("Input parameters: %s", sys.argv)
     logger.info("Configuration loaded:")
     for key, val in settings.items():

@@ -12,7 +12,7 @@ The postprocessor handles two types of messages in a high-performance asynchrono
 
 - **Asynchronous Processing**: Uses a worker pool for OCR decoding to prevent blocking the main communication loop.
 - **Caching Logic**: Implements an `OcrCache` to store recognition results, allowing immediate responses to detector messages with the most recent OCR data.
-- **Robust Configuration**: Supports INI-based configuration for logging levels, socket paths, and worker counts.
+- **Robust Configuration**: Optional INI at `../etc/plugin.stitch-ocr-result.ini`; first CLI argument is always the socket path (same as other postprocessors).
 - **Nuitka Integration**: Fully compatible with Nuitka for compiling into a high-performance standalone binary.
 
 ## Model Output Format
@@ -94,7 +94,7 @@ sudo chmod -R a+x /opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_m
 
 ## Configuration
 
-The postprocessor uses an `.ini` file for configuration. Copy the example file to the AI Manager's configuration directory:
+The postprocessor can be started with the **socket path as an optional first argument** (e.g., `postprocessor-python-stitch-ocr-result.exe C:\path\to\socket.sock`). Additional configuration options are read from a fixed path: `../etc/plugin.stitch-ocr-result.ini` (relative to the postprocessor binary). If the socket path is provided as the first argument, it takes priority over the value set in the .ini configuration file. Copy the example configuration file to the AI Manager's configuration directory:
 
 **Linux:**
 ```bash

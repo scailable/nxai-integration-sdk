@@ -174,7 +174,7 @@ class TestMainLoop(unittest.TestCase):
             KeyboardInterrupt
         ]
         
-        settings = _config(None)
+        settings = _config()
         engine = MagicMock()
         
         with self.assertRaises(KeyboardInterrupt):
@@ -194,7 +194,7 @@ class TestMainLoop(unittest.TestCase):
             mock_factory.return_value = mock_msg
             mock_server.accept.side_effect = [(mock_conn, b"data"), KeyboardInterrupt]
             
-            settings = _config(None)
+            settings = _config()
             with self.assertRaises(KeyboardInterrupt):
                 module.main(settings, MagicMock())
             
