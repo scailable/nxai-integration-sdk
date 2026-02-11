@@ -50,26 +50,45 @@ This postprocessor is integrated into the SDK's CMake build system.
 
 ### Build Steps
 
+Use **Release** configuration so that the installed binary and shared library match what the install step expects (nxai-utilities and the postprocessor should be built in the same configuration).
+
+**Linux** (single-config):
+```bash
+# From the project root
+mkdir -p build
+cd build
+cmake -DCMAKE_BUILD_TYPE=Release ..
+cmake --build . --target postprocessor-python-anpr-example
+```
+
+**Windows** (multi-config; use `--config Release` for build and install):
 ```bash
 # From the project root
 mkdir -p build
 cd build
 cmake ..
-cmake --build . --target postprocessor-python-anpr-example
+cmake --build . --config Release --target postprocessor-python-anpr-example
 ```
 
-**Note**: The `cmake --build` command is cross-platform and works on both Linux and Windows. On Linux, you can alternatively use `make postprocessor-python-anpr-example` if preferred.
+On Linux you can alternatively use `make postprocessor-python-anpr-example` after configuring with `CMAKE_BUILD_TYPE=Release`.
 
 The compiled standalone binary will be located at:
 `build/postprocessor-python-anpr-example/postprocessor-python-anpr-example`
 
 ### Installation
 
-Once compiled, install the postprocessor and its dependencies to the AI Manager's postprocessors directory:
+Once compiled in **Release**, install the postprocessor and its dependencies to the AI Manager's postprocessors directory:
 
+**Linux:**
 ```bash
 # From the build directory
 cmake --install . --component postprocessor-python-anpr-example
+```
+
+**Windows** (must use Release for install):
+```bash
+# From the build directory
+cmake --install . --config Release --component postprocessor-python-anpr-example
 ```
 
 This command installs:
