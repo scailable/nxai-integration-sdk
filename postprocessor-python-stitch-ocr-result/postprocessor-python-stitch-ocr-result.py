@@ -9,9 +9,11 @@ and converts them to readable text by finding argmax for each character position
 import os
 import sys
 import logging
+import tempfile
 import threading
 import configparser
 import queue
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Callable, Optional
 from pprint import pformat
@@ -419,13 +421,13 @@ class OcrCache:
 
 def _config(config_path=None):
     """Read configuration from file"""
-    # Default settings
     script_location = os.path.dirname(sys.argv[0])
+    temp_dir = Path(tempfile.gettempdir())
     settings = {
         "log_level": "DEBUG",
         "ocr_worker_count": max(1, min(4, os.cpu_count() or 1)),
-        "socket_path": "/tmp/postprocessor-stitch-ocr-result.sock",
-        "log_file": "/tmp/postprocessor-stitch-ocr-result.log",
+        "socket_path": str(temp_dir / "postprocessor-stitch-ocr-result.sock"),
+        "log_file": str(temp_dir / "postprocessor-stitch-ocr-result.log"),
         "ocr_output_name": "Identity:0",
         "nxai_utilities_path": os.path.join(script_location, "..", "nxai-utilities", "python-utilities"),
     }
