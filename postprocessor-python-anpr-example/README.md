@@ -22,6 +22,17 @@ By default, the postprocessor expects:
 - **Character Mapping**: `0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ ` (37 classes).
 - **Tensor Name**: `Identity:0` (configurable via `.ini`).
 
+## Example Models
+
+The `example_models` directory contains two ONNX models intended for use with this postprocessor in the AI Manager pipeline:
+
+- **License_Plate_Detector.onnx**: Detector model that produces bounding boxes for license plates. Use it as the detector in the pipeline; the postprocessor attaches the recognized text to these objects.
+- **License_Plate_OCR.onnx**: OCR model that produces raw character logits. Use it as the OCR model in the pipeline; the postprocessor decodes the logits and caches results by object ID.
+
+When building the pipeline in the AI Manager, chain the **License_Plate_Detector** model with the **License_Plate_OCR** model in **Feature Extraction** mode, and set the extracted feature name to **LP** (License Plate).
+
+These models match the expected formats described in **Model Output Format** and **Message Flow and Formats**. Pipeline configuration is described in **AI Manager Integration**.
+
 ## Requirements
 
 To build and install this postprocessor, you need the following dependencies:
@@ -195,7 +206,7 @@ When a **Detector Message** (containing bounding boxes) is received, the postpro
 
 ## AI Manager Integration
 
-To enable this postprocessor, you must configure it in the AI Manager pipeline settings for **both models** (the Detector and the OCR model). This is necessary because the postprocessor needs to receive messages from both to maintain its cache and update metadata.
+To enable this postprocessor, you must configure it in the AI Manager pipeline settings for **both models** (the Detector and the OCR model). This is necessary because the postprocessor needs to receive messages from both to maintain its cache and update metadata. Example ONNX models are provided in the `example_models` directory (see **Example Models**).
 
 Add the postprocessor to the `externalPostprocessors` section in `external_postprocessors.json`:
 
