@@ -208,27 +208,34 @@ When a **Detector Message** (containing bounding boxes) is received, the postpro
 
 To enable this postprocessor, you must configure it in the AI Manager pipeline settings for **both models** (the Detector and the OCR model). This is necessary because the postprocessor needs to receive messages from both to maintain its cache and update metadata. Example ONNX models are provided in the `example_models` directory (see **Example Models**).
 
-Add the postprocessor to the `externalPostprocessors` section in `external_postprocessors.json`:
+Add the postprocessor to `external_postprocessors.json`. Example full file contents:
 
 **Linux:**
 ```json
 {
-  "Name": "ANPR-Example",
-  "Command": "/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors/postprocessor-python-anpr-example",
-  "SocketPath": "/tmp/postprocessor-anpr-example.sock",
-  "ReceiveBinaryData": true
+  "externalPostprocessors": [
+    {
+      "Name": "ANPR-Example",
+      "Command": "/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors/postprocessor-python-anpr-example",
+      "SocketPath": "/tmp/postprocessor-anpr-example.sock",
+      "ReceiveBinaryData": true
+    }
+  ]
 }
 ```
 
 **Windows:**
 ```json
 {
-  "Name": "ANPR-Example",
-  "Command": "C:\\Windows\\System32\\config\\systemprofile\\AppData\\Local\\Network Optix\\Network Optix MetaVMS Media Server\\nx_ai_manager\\nxai_manager\\postprocessors\\postprocessor-python-anpr-example.exe",
-  "SocketPath": "C:\\Windows\\SystemTemp\\postprocessor-anpr-example.sock",
-  "ReceiveBinaryData": true
+  "externalPostprocessors": [
+    {
+      "Name": "ANPR-Example",
+      "Command": "C:\\Windows\\System32\\config\\systemprofile\\AppData\\Local\\Network Optix\\Network Optix MetaVMS Media Server\\nx_ai_manager\\nxai_manager\\postprocessors\\postprocessor-python-anpr-example.exe",
+      "SocketPath": "C:\\Windows\\SystemTemp\\postprocessor-anpr-example.sock",
+      "ReceiveBinaryData": true
+    }
+  ]
 }
-
 ```
 
 **Note**: The shared library (`libnxai-c-utilities-shared.so` on Linux or `nxai-c-utilities-shared.dll` on Windows) must be in the same directory as the postprocessor binary. This is handled automatically by the installation process.
