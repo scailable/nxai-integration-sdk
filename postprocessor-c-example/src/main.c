@@ -2,8 +2,6 @@
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
-#include <strings.h>
-#include <unistd.h>
 
 // Local includes
 #include "mpack.h"
@@ -13,24 +11,18 @@
 #include "data_utils.h"
 #include "nxai_data_structures.h"
 
+#if defined( _MSC_VER )
+// Windows stuff
+#define NXAI_STRDUP _strdup
+#else
+// Linux stuff
+#include <strings.h>
+#define NXAI_STRDUP strdup
+#endif
+
 #define STRLEN( s ) ( sizeof( s ) / sizeof( s[0] ) )
 
-// Flag to keep track of interrupts
-volatile sig_atomic_t interrupt_flag = false;
-
 char *processMpackDocument( const char *input_buffer, size_t input_buffer_length, size_t *output_buffer_length );
-/**
- * @brief Function to handle interrupt signals
- *
- * When the NXAI Runtime is stopped, it sends an interrupt signal to all postprocessors it started
- * and waits for them to exit.
- *
- * This function sets a global interrupt flag which stops the socket listener loop. After the loop is broken
- * the socket is closed and the application exits gracefully.
- *
- * @param sig
- */
-void handle_interrupt( int sig );
 
 // Main function, the entry point of the application
 int main( int argc, char *argv[] ) {
@@ -40,8 +32,8 @@ int main( int argc, char *argv[] ) {
         exit( 2 );
     }
 
-    // Set signal handler to listen for interrupt signals
-    signal( SIGINT, handle_interrupt );
+    // Initialize socket system
+    nxai_socket_initialize_sockets();
 
     const char *socket_path = argv[1];
 
@@ -52,12 +44,18 @@ int main( int argc, char *argv[] ) {
     uint32_t message_length;
 
     // Create a listener socket
-    int socket_fd = nxai_socket_create_listener( socket_path );
+    nxai_socket_t socket_fd = nxai_socket_create_listener( socket_path );
+
+    if ( nxai_socket_is_valid( &socket_fd ) == false ) {
+        printf( "EXAMPLE POSTPROCESSOR: Error! Could not create socket at path: %s\n", socket_path );
+        return 5;
+    }
 
     // Main loop: continues until an interrupt signal is received
-    while ( interrupt_flag == false ) {
+    while ( true ) {
+        printf( "EXAMPLE POSTPROCESSOR: Waiting for message\n" );
         // Wait for a message on the socket
-        int connection_fd = nxai_socket_await_message( socket_fd, &allocated_buffer_size, &input_buffer, &message_length );
+        nxai_socket_t connection_fd = nxai_socket_await_message( socket_fd, &allocated_buffer_size, &input_buffer, &message_length );
 
         // If connection times out, it continues to wait for the message again
         if ( connection_fd == -1 ) {
@@ -67,16 +65,21 @@ int main( int argc, char *argv[] ) {
         // Process the Mpack document
         size_t output_length;
         char *output_message = processMpackDocument( input_buffer, message_length, &output_length );
+        if ( output_message == NULL ) {
+            // Error or exit signal received from AI Manager
+            nxai_close_socket( connection_fd );
+            break;
+        }
 
         // Send the processed output back to the socket
-        nxai_socket_send_to_connection( connection_fd, output_message, output_length );
+        nxai_socket_send_to_connection( connection_fd, output_message, (uint32_t) output_length );
 
         // Free buffer
         free( output_message );
 
         // Close the connection
-        if ( close( connection_fd ) == -1 ) {
-            fprintf( stderr, "EXAMPLE POSTPROCESSOR: Warning: Sender socket close error!\n" );
+        if ( nxai_close_socket( connection_fd ) == -1 ) {
+            printf( "EXAMPLE POSTPROCESSOR: Warning: Sender socket close error!\n" );
         }
     }
 
@@ -107,6 +110,13 @@ char *processMpackDocument( const char *input_buffer, size_t input_buffer_length
     mpack_tree_init_data( &tree, input_buffer, input_buffer_length );
     mpack_tree_parse( &tree );
     mpack_node_t inference_results_root = mpack_tree_root( &tree );
+
+    // First check if AI Manager sent exit signal
+    mpack_node_t exit_signal = mpack_node_map_cstr_optional( inference_results_root, "EXIT" );
+    if ( mpack_node_is_missing( exit_signal ) == false ) {
+        printf( "EXAMPLE POSTPROCESSOR: Exit signal received.\n" );
+        return NULL;
+    }
 
     // Read timestamp
     mpack_node_t timestamp_node = mpack_node_map_cstr( inference_results_root, "Timestamp" );
@@ -189,7 +199,7 @@ char *processMpackDocument( const char *input_buffer, size_t input_buffer_length
     coordinates[1] = 100.0;
     coordinates[2] = 200.0;
     coordinates[3] = 200.0;
-    bboxs[num_bboxs - 1] = (bbox_object_t) { .class_name = strdup( "test" ), .format = "xyxy", .coords_length = 4, .coordinates = coordinates };
+    bboxs[num_bboxs - 1] = (bbox_object_t) { .class_name = NXAI_STRDUP( "test" ), .format = "xyxy", .coords_length = 4, .coordinates = coordinates };
 
     ////////////////////////////////////////////////////
     //// Write output data
@@ -224,11 +234,4 @@ char *processMpackDocument( const char *input_buffer, size_t input_buffer_length
     free( scores );
 
     return mpack_buffer;
-}
-
-// Function to handle interrupt signals
-void handle_interrupt( int signal ) {
-    (void) signal;
-    // Set the interrupt flag to true on receiving an interrupt signal
-    interrupt_flag = true;
 }

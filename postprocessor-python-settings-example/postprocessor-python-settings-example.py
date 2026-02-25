@@ -1,7 +1,7 @@
 import os
 import sys
 import socket
-import signal
+
 import logging
 import logging.handlers
 import configparser
@@ -10,7 +10,7 @@ from pprint import pformat
 # Add the nxai-utilities python utilities
 script_location = os.path.dirname(sys.argv[0])
 sys.path.append(os.path.join(script_location, "../nxai-utilities/python-utilities"))
-import communication_utils
+import nxai_communication_utils
 
 
 CONFIG_FILE = os.path.join(script_location, "..", "etc", "plugin.settings.ini")
@@ -36,7 +36,8 @@ Postprocessor_Name = "Python-Example-Setting-Postprocessor"
 # The socket this postprocessor will listen on.
 # This is always given as the first argument when the process is started
 # But it can be manually defined as well, as long as it is the same as the socket path in the runtime settings
-Postprocessor_Socket_Path = "/tmp/python-example-settings-postprocessor.sock"
+import tempfile
+Postprocessor_Socket_Path = os.path.join(tempfile.gettempdir(),"python-example-settings-postprocessor.sock")
 
 # Data Types
 # 1:  //FLOAT
@@ -81,15 +82,10 @@ def set_log_level(level):
         logger.error(e, exc_info=True)
 
 
-def signal_handler(sig, _):
-    logger.info("Received interrupt signal: " + str(sig))
-    sys.exit(0)
-
-
 def main():
     # Start socket listener to receive messages from NXAI runtime
     logger.debug("Creating socket at " + Postprocessor_Socket_Path)
-    server = communication_utils.startUnixSocketServer(Postprocessor_Socket_Path)
+    server = nxai_communication_utils.SocketListener(Postprocessor_Socket_Path)
 
     # Wait for messages in a loop
     while True:
@@ -97,14 +93,18 @@ def main():
         logger.debug("Waiting for input message")
 
         try:
-            input_message, connection = communication_utils.waitForSocketMessage(server)
+            connection, input_message = server.accept()
             logger.debug("Received input message")
-        except socket.timeout:
+        except nxai_communication_utils.SocketTimeout:
             # Request timed out. Continue waiting
             continue
 
         # Parse input message
-        input_object = communication_utils.parseInferenceResults(input_message)
+        input_object = nxai_communication_utils.parseInferenceResults(input_message)
+        if isinstance(input_object, nxai_communication_utils.ExitSignal):
+            logger.info("Received exit signal.")
+            connection.close()
+            break
 
         # Use pformat to format the deep object
         formatted_unpacked_object = pformat(input_object)
@@ -125,10 +125,11 @@ def main():
         logger.info("Added attributes to all objects.")
 
         # Write object back to string
-        output_message = communication_utils.writeInferenceResults(input_object)
+        output_message = nxai_communication_utils.writeInferenceResults(input_object)
 
         # Send message back to runtime
-        communication_utils.sendMessageOverConnection(connection, output_message)
+        connection.send(output_message)
+        connection.close()
 
 
 if __name__ == "__main__":
@@ -146,8 +147,7 @@ if __name__ == "__main__":
     # Parse input arguments
     if len(sys.argv) > 1:
         Postprocessor_Socket_Path = sys.argv[1]
-    # Handle interrupt signals
-    signal.signal(signal.SIGTERM, signal_handler)
+
     # Start program
     try:
         main()

@@ -1,11 +1,11 @@
 Postprocessor C Example
 =========================
 
-This example application provides an example on how to create a C based postprocessor that can be integrated with the NXAI Edge AI Manager.
+This example application provides an example on how to create a C based postprocessor that can be integrated with the NXAI AI Manager.
 
 # Postprocessors Control Flow
 
-The normal control flow of a postprocessor is to receive a MessagePack binary message representing the inference results from the NXAI Edge AI Manager, and return the same or an altered version of the received MessagePack message.
+The normal control flow of a postprocessor is to receive a MessagePack binary message representing the inference results from the NXAI AI Manager, and return the same or an altered version of the received MessagePack message.
 
 An external postprocessor can parse the incoming MessagePack message, do analysis, optionally alter it, and return it. The alterations made by an external postprocessor will be kept and sent to the Network Optix server to be represented as bounding boxes or events.
 
@@ -55,25 +55,33 @@ Some fields depend on which model is assigned. If a model outputs bounding boxes
 
 # How to use
 
-Once compiled, copy the executable to an accessible directory. A convenience directory within the Edge AI Manager installation is created for this purpose at `/opt/networkoptix-metavms/mediaserver/bin/plugins/nxai_plugin/nxai_manager/postprocessors`.
+Once compiled, copy the executable to an accessible directory. A convenience directory within the AI Manager installation is created for this purpose at `/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors`.
 
-It's a good idea to make sure the application and settings file you add is readable and executable by the NXAI Edge AI Manager. This can be achieved by running:
+It's a good idea to make sure the application and settings file you add is readable and executable by the NXAI AI Manager. This can be achieved by running:
 
 ```
-sudo chmod -R 777 /opt/networkoptix-metavms/mediaserver/bin/plugins/nxai_plugin/nxai_manager/postprocessors
+sudo chmod -R 777 /opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors
 ```
 
 ## Defining the postprocessor
 
-Create a configuration file at `/opt/networkoptix-metavms/mediaserver/bin/plugins/nxai_plugin/nxai_manager/postprocessors/external_postprocessors.json` and add the details of your postprocessor to the root object of that file. For example: 
+Create a configuration file at
+```
+/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors/external_postprocessors.json
+```
+for Linux, or
+```
+C:\Windows\System32\config\systemprofile\AppData\Local\Network Optix\Network Optix MetaVMS Media Server\nx_ai_manager\nxai_manager\postprocessors\external_postprocessors.json
+```
+for Windows, and add the details of your postprocessor to the root object of that file. For example: 
 
 ``` json
 {
     "externalPostprocessors": [
         {
-            "Name":"Example-Postprocessor",
-            "Command":"/opt/networkoptix-metavms/mediaserver/bin/plugins/nxai_plugin/nxai_manager/postprocessors/postprocessor-c-example",
-            "SocketPath":"/tmp/example-postprocessor.sock",
+            "Name":"Example-C-Postprocessor",
+            "Command":"/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors/postprocessor-c-example",
+            "SocketPath":"/tmp/example-c-postprocessor.sock",
             "ReceiveInputTensor": false,
             "Objects": [
                 {
@@ -85,8 +93,28 @@ Create a configuration file at `/opt/networkoptix-metavms/mediaserver/bin/plugin
     ]
 }
 ```
+For Linux, and
+```json
+{
+    "externalPostprocessors": [
+        {
+            "Name":"Example-C-Postprocessor",
+            "Command":"C:\\Windows\\System32\\config\\systemprofile\\AppData\\Local\\Network Optix\\Network Optix MetaVMS Media Server\\nx_ai_manager\\nxai_manager\\postprocessors\\postprocessor-c-example.exe",
+            "SocketPath":"C:\\Windows\\Temp\\example-c-postprocessor.sock",
+            "ReceiveInputTensor": false,
+            "Objects": [
+                {
+                    "ID": "test",
+                    "Name": "Test"
+                }
+            ]
+        }
+    ]
+}
+```
+For Windows.
 
-This tells the Edge AI Manager about the postprocessor:
+This tells the AI Manager about the postprocessor:
 - **Name** gives the postprocesor a name so it can be selected later
 - **Command** defines how to start the postprocessor
 - **SocketPath** tells the AI Manager where to send data to so the external postprocessor will receive it

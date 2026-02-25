@@ -7,7 +7,7 @@ The postprocessor definition is read by the NxAI Plugin to gather all the events
 
 # Postprocessors Control Flow
 
-The normal control flow of a postprocessor is to receive a MessagePack binary message representing the inference results from the NXAI Edge AI Manager, and return the same or an altered version of the received MessagePack message.
+The normal control flow of a postprocessor is to receive a MessagePack binary message representing the inference results from the NXAI AI Manager, and return the same or an altered version of the received MessagePack message.
 
 An external postprocessor can parse the incoming MessagePack message, do analysis, optionally alter it, and return it. The alterations made by an external postprocessor will be kept and sent to the Network Optix server to be represented as bounding boxes or events.
 
@@ -61,8 +61,8 @@ The image header message contains fields indicating information about the image 
 {
     "Width": <Width>,
     "Height": <Height>,
-    "SHMKey": <SHM Key>,
-    "SHMID": <SHM ID>
+    "Channels": <Channels>,
+    "SHMKEY": <SHM Key>
 }
 ```
 
@@ -90,7 +90,7 @@ git pull --recurse-submodules
 
 ## Configuration of example postprocessor
 
-Create a [configuration file](plugin.example.ini.example) at `/opt/networkoptix-metavms/mediaserver/bin/plugins/nxai_plugin/nxai_manager/etc/plugin.example.ini` and add some overrides for the configuration.
+Create a [configuration file](plugin.example.ini.example) at `/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/etc/plugin.example.ini` and add some overrides for the configuration.
 
 This plugin only supports changing the debug level between DEBUG, INFO, WARNING, ERROR and CRITICAL
 
@@ -123,7 +123,7 @@ sudo apt install patchelf
 Change into the directory created for the project if you're not already there.
 
 ```shell
-cd sclbl-integration-sdk/
+cd nxai-integration-sdk/
 ```
 
 Prepare the *build* directory in the project directory, and switch to the build directory.
@@ -164,11 +164,11 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/postprocessor-python-events-example
 
 # Add installation option
 install(TARGETS
-    DESTINATION /opt/networkoptix-metavms/mediaserver/bin/plugins/nxai_plugin/nxai_manager/postprocessors/
+    DESTINATION /opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors/
 )
 install(PROGRAMS
     ${CMAKE_CURRENT_BINARY_DIR}/postprocessor-python-events-example/postprocessor-python-events-example
-    DESTINATION /opt/networkoptix-metavms/mediaserver/bin/plugins/nxai_plugin/nxai_manager/postprocessors/
+    DESTINATION /opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors/
 )
 ```
 
@@ -185,12 +185,12 @@ make
 
 Once compiled, copy the executable to an accessible directory.
 
-A convenience directory within the Edge AI Manager installation is created for this purpose at `/opt/networkoptix-metavms/mediaserver/bin/plugins/nxai_plugin/nxai_manager/postprocessors`.
+A convenience directory within the AI Manager installation is created for this purpose at `/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors`.
 
-The application and settings files you add must be readable and executable by the NX AI Edge AI Manager. This can be achieved by running:
+The application and settings files you add must be readable and executable by the NX AI AI Manager. This can be achieved by running:
 
 ```
-sudo chmod -R 777 /opt/networkoptix-metavms/mediaserver/bin/plugins/nxai_plugin/nxai_manager/postprocessors
+sudo chmod -R 777 /opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors
 ```
 
 Install the postprocessor automatically with the cmake command, also from within the *build* directory.
@@ -201,16 +201,22 @@ cmake --build . --target install
 
 ## Defining the postprocessor
 
-Create a configuration file at `/opt/networkoptix-metavms/mediaserver/bin/plugins/nxai_plugin/nxai_manager/postprocessors/external_postprocessors.json` and add the details of your postprocessor to the root object of that file.
-
-For example:
+Create a configuration file at
+```
+/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors/external_postprocessors.json
+```
+for Linux, or
+```
+C:\Windows\System32\config\systemprofile\AppData\Local\Network Optix\Network Optix MetaVMS Media Server\nx_ai_manager\nxai_manager\postprocessors\external_postprocessors.json
+```
+for Windows, and add the details of your postprocessor to the root object of that file. For example: 
 
 ``` json
 {
     "externalPostprocessors": [
         {
             "Name":"Example-Events-Postprocessor",
-            "Command":"/opt/networkoptix-metavms/mediaserver/bin/plugins/nxai_plugin/nxai_manager/postprocessors/postprocessor-python-events-example",
+            "Command":"/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors/postprocessor-python-events-example",
             "SocketPath":"/tmp/python-events-example-postprocessor.sock",
             "ReceiveInputTensor": false,
             "Events": [
@@ -223,8 +229,29 @@ For example:
     ]
 }
 ```
+For Linux, and
+```json
+{
+    "externalPostprocessors": [
+        {
+            "Name":"Example-Events-Postprocessor",
+            "Command":"C:\\Windows\\System32\\config\\systemprofile\\AppData\\Local\\Network Optix\\Network Optix MetaVMS Media Server\\nx_ai_manager\\nxai_manager\\postprocessors\\postprocessor-python-events-example.exe",
+            "SocketPath":"C:\\Windows\\Temp\\python-events-postprocessor.sock",
+            "ReceiveInputTensor": false,
+            "Events": [
+                {
+                    "ID":"ex.example.event",
+                    "Name":"Example Event"
+                }
+            ]
+            
+        }
+    ]
+}
+```
+For Windows.
 
-This tells the Edge AI Manager about the postprocessor:
+This tells the AI Manager about the postprocessor:
 - **Name** gives the postprocesor a name so it can be selected later
 - **Command** defines how to start the postprocessor
 - **SocketPath** tells the AI Manager where to send data to so the external postprocessor will receive it
@@ -244,7 +271,7 @@ sudo service networkoptix-metavms-mediaserver restart
 You also want to make sure the postprocessor can be used by the NX AI Manager (this is the mostly same command as earlier)
 
 ```shell
-sudo chmod -R a+x /opt/networkoptix-metavms/mediaserver/bin/plugins/nxai_plugin/nxai_manager/postprocessors/
+sudo chmod -R a+x /opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors/
 ```
 
 ## Selecting to the postprocessor
@@ -256,7 +283,7 @@ If the postprocessor is defined correctly, its name should appear in the list of
 There is an output log where the uploads can be tracked in real time from the server.
 
 ```shell
-tail -f /opt/networkoptix-metavms/mediaserver/bin/plugins/nxai_plugin/nxai_manager/etc/plugin.events.example.log
+tail -f /opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/etc/plugin.events.example.log
 ```
 
 # Licence

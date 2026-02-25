@@ -1,7 +1,7 @@
 Python Clip Example
 =========================
 
-This example application provides an example on how to create a Python based preprocessor that can be integrated with the NXAI Edge AI Manager.
+This example application provides an example on how to create a Python based preprocessor that can be integrated with the NXAI AI Manager.
 
 This example is meant to be integrated with an OpenAI CLIP model. The CLIP model takes in an image and a number of text prompts. It will then output a list of scores, one for each prompt, on how well the prompt matches the image.
 
@@ -29,7 +29,7 @@ The header message sent to the external postprocessor is MessagePack encoded and
 
 ```json
 {
-    "SHMKey": <Key>,
+    "SHMKEY": <Key>,
     "SHMID": <ID>,
 }
 ```
@@ -53,25 +53,33 @@ The tensor preprocessor is free to add, remove or edit tensors, as long as the t
 
 # How to use
 
-Once compiled, copy the executable to an accessible directory. A convenience directory within the Edge AI Manager installation is created for this purpose at `/opt/networkoptix-metavms/mediaserver/bin/plugins/nxai_plugin/nxai_manager/preprocessors`.
+Once compiled, copy the executable to an accessible directory. A convenience directory within the AI Manager installation is created for this purpose at `/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/preprocessors`.
 
-It's a good idea to make sure the application and settings file you add is readable and executable by the NXAI Edge AI Manager. This can be achieved by running:
+It's a good idea to make sure the application and settings file you add is readable and executable by the NXAI AI Manager. This can be achieved by running:
 
 ```
-sudo chmod -R 777 /opt/networkoptix-metavms/mediaserver/bin/plugins/nxai_plugin/nxai_manager/preprocessors
+sudo chmod -R 777 /opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/preprocessors
 ```
 
 ## Defining the preprocessor
 
-Create a configuration file at `/opt/networkoptix-metavms/mediaserver/bin/plugins/nxai_plugin/nxai_manager/preprocessors/external_preprocessors.json` and add the details of your preprocessor to the root object of that file. For example: 
+Create a configuration file at
+```
+/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/preprocessors/external_preprocessors.json
+```
+for Linux, or
+```
+C:\Windows\System32\config\systemprofile\AppData\Local\Network Optix\Network Optix MetaVMS Media Server\nx_ai_manager\nxai_manager\preprocessors\external_preprocessors.json
+```
+for Windows, and add the details of your preprocessor to the root object of that file. For example: 
 
 ``` json
 {
     "externalPreprocessors": [
         {
             "Name": "Example-Preprocessor-Clip",
-            "Command": "/opt/networkoptix-metavms/mediaserver/bin/plugins/nxai_plugin/nxai_manager/preprocessors/preprocessor-python-clip-example",
-            "SocketPath": "/tmp/example-clip-preprocessor.sock",
+            "Command": "/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/preprocessors/preprocessor-python-clip-example",
+            "SocketPath":"/tmp/example-clip-preprocessor.sock",
             "Schedule": "TENSOR",
             "Settings": [
                 {
@@ -91,8 +99,36 @@ Create a configuration file at `/opt/networkoptix-metavms/mediaserver/bin/plugin
     ]
 }
 ```
+for Linux, and
+```json
+{
+    "externalPreprocessors": [
+        {
+            "Name":"Example-Preprocessor-Clip",
+            "Command":"C:\\Windows\\System32\\config\\systemprofile\\AppData\\Local\\Network Optix\\Network Optix MetaVMS Media Server\\nx_ai_manager\\nxai_manager\\preprocessors\\preprocessor-python-clip-example.exe",
+            "SocketPath":"C:\\Windows\\Temp\\python-clip-preprocessor.sock",
+            "Schedule": "TENSOR",
+            "Settings": [
+                {
+                    "type": "Repeater",
+                    "count": 5,
+                    "startIndex": 1,
+                    "template": {
+                        "type": "TextField",
+                        "name": "externalprocessor.prompt#",
+                        "caption": "Prompt #",
+                        "description": "Prompt #",
+                        "defaultValue": ""
+                    }
+                }
+            ]
+        }
+    ]
+}
+```
+For Windows.
 
-This tells the Edge AI Manager about the preprocessor:
+This tells the AI Manager about the preprocessor:
 - **Name** gives the preprocesor a name so it can be selected later
 - **Command** defines how to start the preprocessor
 - **SocketPath** tells the AI Manager where to send data to so the external preprocessor will receive it

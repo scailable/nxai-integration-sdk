@@ -1,16 +1,13 @@
 import os
 import sys
-import socket
-import signal
 import msgpack
 import logging
-import logging.handlers
 import configparser
 
 # Add the nxai-utilities python utilities
 script_location = os.path.dirname(sys.argv[0])
 sys.path.append(os.path.join(script_location, "../nxai-utilities/python-utilities"))
-import communication_utils
+import nxai_communication_utils
 
 CONFIG_FILE = os.path.join(script_location, "..", "etc", "plugin.image.pre.ini")
 
@@ -21,12 +18,12 @@ else:
     LOG_FILE = os.path.join(script_location, "plugin.image.pre.log")
 
 # Initialize plugin and logging, script makes use of INFO and DEBUG levels
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - example - %(message)s",
-    filename=LOG_FILE,
-    filemode="w",
-)
+handler_stream = logging.StreamHandler(sys.stdout)
+handler_stream.setLevel(logging.DEBUG)
+handler_file = logging.FileHandler(filename=LOG_FILE, mode="w")
+handler_file.setLevel(logging.DEBUG)
+
+logging.basicConfig(format="%(asctime)s - %(levelname)s - example - %(message)s", handlers=[handler_stream, handler_file])
 
 # The socket this preprocessor will listen on.
 # This is always given as the first argument when the process is started
@@ -34,20 +31,17 @@ logging.basicConfig(
 Preprocessor_Socket_Path = "/tmp/example-image-preprocessor.sock"
 
 # Define a single SHM object to share images back to AI Manager
-global output_shm
+global output_shm, input_shm
 output_shm = None
+input_shm = None
 
 
-def parseImageFromSHM(shm_key: int, width: int, height: int, channels: int, external_settings: dict):
-    global output_shm
-    if output_shm is None:
-        # Can reuse SHM ( if data is smaller or equal size ) or create new SHM and return ID
-        input_image_size = width * height * channels
-        output_shm = communication_utils.create_shm(input_image_size)
-        print("EXAMPLE PLUGIN Created shm ID: ", output_shm.id, "Size:", output_shm.size)
-
+def parseImageFromSHM(shm_key: str, width: int, height: int, channels: int, external_settings: dict):
     # Read image data from the shared memory
-    image_data = communication_utils.read_shm(shm_key)
+    global input_shm
+    if input_shm is None:
+        input_shm = nxai_communication_utils.SharedMemory(key=shm_key)
+    image_data = input_shm.read()
 
     # Check settings if image should be mirrored
     mirror_image = True
@@ -71,25 +65,33 @@ def parseImageFromSHM(shm_key: int, width: int, height: int, channels: int, exte
         new_width = width
         new_height = height
 
-    # Write un/modified image to shared memory
-    communication_utils.write_shm(output_shm, output_image)
+    global output_shm
+    if output_shm is None:
+        # Can reuse SHM ( if data is smaller or equal size ) or create new SHM and return ID
+        output_data_size = len(output_image)
+        output_shm = nxai_communication_utils.SharedMemory(size=output_data_size)
+        logger.info("Created SHM with Key: " + output_shm.key)
+    output_shm.write(bytes(output_image))
 
-    return output_shm.id, new_width, new_height, channels
+    return output_shm.key, new_width, new_height, channels
 
 
 def main():
     # Start socket listener to receive messages from NXAI runtime
-    server = communication_utils.startUnixSocketServer(Preprocessor_Socket_Path)
+    server = nxai_communication_utils.SocketListener(Preprocessor_Socket_Path)
     # Wait for messages in a loop
     while True:
         # Wait for input message from runtime
         try:
-            input_message, connection = communication_utils.waitForSocketMessage(server)
-        except socket.timeout:
+            connection, input_message = server.accept()
+        except nxai_communication_utils.SocketTimeout:
             # Request timed out. Continue waiting
             continue
 
         image_header = msgpack.unpackb(input_message)
+        if "EXIT" in image_header:
+            # AI Manager sent exit signal
+            break
         print("EXAMPLE PREPROCESSOR: Received input message: ", image_header)
 
         external_settings = {}
@@ -97,16 +99,19 @@ def main():
             logger.info("Got settings: " + str(image_header["ExternalProcessorSettings"]))
             external_settings = image_header["ExternalProcessorSettings"]
 
+        # Convert SHM Key to integer from string
+        shm_key = image_header["SHMKEY"]
+
         # Process image
-        output_shm_id, width, height, channels = parseImageFromSHM(
-            image_header["SHMKey"],
+        output_shm_key, width, height, channels = parseImageFromSHM(
+            shm_key,
             image_header["Width"],
             image_header["Height"],
             image_header["Channels"],
             external_settings,
         )
 
-        image_header["SHMID"] = output_shm_id
+        image_header["SHMKEY"] = output_shm_key
         image_header["Width"] = width
         image_header["Height"] = height
         image_header["Channels"] = channels
@@ -115,16 +120,8 @@ def main():
         output_message = msgpack.packb(image_header)
 
         # Send message back to runtime
-        communication_utils.sendMessageOverConnection(connection, output_message)
-
-
-def signalHandler(sig, _):
-    print("EXAMPLE PREPROCESSOR: Received interrupt signal: ", sig)
-    # Detach and destroy output shm
-    if output_shm is not None:
-        output_shm.detach()
-        output_shm.remove()
-    sys.exit(0)
+        connection.send(output_message)
+        connection.close()
 
 
 def config():
@@ -160,8 +157,6 @@ if __name__ == "__main__":
     # Parse input arguments
     if len(sys.argv) > 1:
         Preprocessor_Socket_Path = sys.argv[1]
-    # Handle interrupt signals
-    signal.signal(signal.SIGTERM, signalHandler)
 
     ## initialize the logger
     logger = logging.getLogger(__name__)

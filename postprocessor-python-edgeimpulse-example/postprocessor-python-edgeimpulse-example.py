@@ -1,7 +1,6 @@
 import os
 import sys
 import socket
-import signal
 import logging
 import logging.handlers
 import configparser
@@ -44,7 +43,7 @@ logging.basicConfig(
 
 # Add the nxai-utilities python utilities
 sys.path.append(os.path.join(script_location, "../nxai-utilities/python-utilities"))
-import communication_utils
+import nxai_communication_utils
 
 # The name of the postprocessor.
 # This is used to match the definition of the postprocessor with routing.
@@ -53,7 +52,8 @@ Postprocessor_Name = "Python-EdgeImpulse-Postprocessor"
 # The socket this postprocessor will listen on.
 # This is always given as the first argument when the process is started
 # But it can be manually defined as well, as long as it is the same as the socket path in the runtime settings
-Postprocessor_Socket_Path = "/tmp/python-edgeimpulse-postprocessor.sock"
+import tempfile
+Postprocessor_Socket_Path = os.path.join(tempfile.gettempdir(),"python-edgeimpulse-postprocessor.sock")
 
 
 def send_samples_buffer():
@@ -66,17 +66,13 @@ def send_samples_buffer():
     # At the end, it empties the sample buffer.
     global samples_buffer, samples_counter
     if len(samples_buffer) > 0:
-        logging.info(
-            "Sending {c} samples to Edge Impulse...".format(c=len(samples_buffer))
-        )
+        logging.info("Sending {c} samples to Edge Impulse...".format(c=len(samples_buffer)))
         start_at = time.perf_counter()
         samples = []
         for contents in samples_buffer:
             samples_counter += 1
             logging.info("Create sample" + str(samples_counter))
-            filename = "{dt}C{c}.jpg".format(
-                dt=datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), c=samples_counter
-            )
+            filename = "{dt}C{c}.jpg".format(dt=datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), c=samples_counter)
             output = io.BytesIO(contents)
             sample = edgeimpulse.experimental.data.Sample(
                 filename=filename,
@@ -103,15 +99,11 @@ def send_samples_buffer():
                 t=samples_counter,
             )
         )
-        logging.info(
-            "Send a total of {t} samples to Edge Impulse".format(t=samples_counter)
-        )
+        logging.info("Send a total of {t} samples to Edge Impulse".format(t=samples_counter))
 
         samples_buffer = []
     else:
-        logging.info(
-            "No samples to send to Edge Impulse. Total {t}".format(t=samples_counter)
-        )
+        logging.info("No samples to send to Edge Impulse. Total {t}".format(t=samples_counter))
 
 
 def config():
@@ -129,9 +121,7 @@ def config():
         configuration = configparser.ConfigParser()
         configuration.read(CONFIG_FILE)
 
-        configured_log_level = configuration.get(
-            "common", "debug_level", fallback="INFO"
-        )
+        configured_log_level = configuration.get("common", "debug_level", fallback="INFO")
         set_log_level(configured_log_level)
 
         for section in configuration.sections():
@@ -140,21 +130,13 @@ def config():
                 logger.info("config key: " + key + " = " + configuration[section][key])
 
         # Override default values from config
-        edge_impulse_api_key = configuration.get(
-            "edgeimpulse", "api_key", fallback=default_edge_impulse_api_key
-        )
+        edge_impulse_api_key = configuration.get("edgeimpulse", "api_key", fallback=default_edge_impulse_api_key)
 
         logger.info("new edge_impulse_api_key: " + edge_impulse_api_key)
 
-        auto_generator = configuration.get(
-            "edgeimpulse", "auto_generator", fallback=False
-        )
-        auto_generator_every_seconds = int(
-            configuration.get("edgeimpulse", "auto_generator_every_seconds", fallback=1)
-        )
-        samples_buffer_flush_size = int(
-            configuration.get("edgeimpulse", "samples_buffer_flush_size", fallback=20)
-        )
+        auto_generator = configuration.get("edgeimpulse", "auto_generator", fallback=False)
+        auto_generator_every_seconds = int(configuration.get("edgeimpulse", "auto_generator_every_seconds", fallback=1))
+        samples_buffer_flush_size = int(configuration.get("edgeimpulse", "samples_buffer_flush_size", fallback=20))
         p_value = float(configuration.get("edgeimpulse", "p_value", fallback=0.4))
 
     except Exception as e:
@@ -168,13 +150,6 @@ def set_log_level(level):
         logger.setLevel(level)
     except Exception as e:
         logger.error(e, exc_info=True)
-
-
-def signal_handler(sig, _):
-    logging.info("Received interrupt signal: " + str(sig))
-    if len(samples_buffer) > 0:
-        send_samples_buffer()
-    sys.exit(0)
 
 
 def main():
@@ -195,7 +170,7 @@ def main():
         os.remove(Postprocessor_Socket_Path)
     except OSError:
         pass
-    server = communication_utils.startUnixSocketServer(Postprocessor_Socket_Path)
+    server = nxai_communication_utils.SocketListener(Postprocessor_Socket_Path)
 
     # Get the current time at the start
     start_time = time.time()
@@ -206,26 +181,24 @@ def main():
 
         upload_sample = False
 
-        logging.debug("Wait for message " + str(counter))
+        logger.debug("Wait for message " + str(counter))
         # Wait for input message from runtime
         try:
-            input_message, connection = communication_utils.waitForSocketMessage(server)
-            image_header = communication_utils.receiveMessageOverConnection(connection)
-        except socket.timeout:
+            connection, input_message = server.accept()
+            image_header = connection.receive()
+        except nxai_communication_utils.SocketTimeout:
             # Request timed out. Continue waiting
             continue
 
         counter = counter + 1
 
-        logging.debug("Message " + str(counter) + "received")
+        logger.debug("Message " + str(counter) + "received")
 
         # Parse input message
         parsed_response = msgpack.unpackb(input_message)
 
         # Read Output types, shapes and sizes
-        output_data_types = parsed_response.get(
-            "OutputDataTypes"
-        )  # 1 for float32 and 3 for int8
+        output_data_types = parsed_response.get("OutputDataTypes")  # 1 for float32 and 3 for int8
         output_shapes = parsed_response.get("OutputShapes")
         output_sizes = [prod(output_shapes[i]) for i in range(len(output_shapes))]
 
@@ -233,19 +206,15 @@ def main():
         for i, key in enumerate(parsed_response["Outputs"]):
             value = parsed_response["Outputs"][key]
             if output_data_types[i] == 1:
-                parsed_response["Outputs"][key] = list(
-                    struct.unpack("f" * output_sizes[i], value)
-                )
+                parsed_response["Outputs"][key] = list(struct.unpack("f" * output_sizes[i], value))
             elif output_data_types[i] == 3:
-                parsed_response["Outputs"][key] = list(
-                    struct.unpack("b" * output_sizes[i], value)
-                )
+                parsed_response["Outputs"][key] = list(struct.unpack("b" * output_sizes[i], value))
 
         if logging.getLogger().isEnabledFor(logging.DEBUG):
-            logging.debug("Message " + str(counter) + " parsed")
+            logger.debug("Message " + str(counter) + " parsed")
             # Use pformat to format the deep object
             formatted_object = pformat(parsed_response)
-            logging.debug(f"Parsed response:\n\n{formatted_object}\n\n")
+            logger.debug(f"Parsed response:\n\n{formatted_object}\n\n")
 
         current_time = time.time()
 
@@ -253,13 +222,7 @@ def main():
         if auto_generator and current_time - start_time >= auto_generator_every_seconds:
 
             start_time = current_time
-            logging.info(
-                "Add timed sample every "
-                + str(auto_generator_every_seconds)
-                + " seconds number "
-                + str(counter)
-                + " to upload queue"
-            )
+            logging.info("Add timed sample every " + str(auto_generator_every_seconds) + " seconds number " + str(counter) + " to upload queue")
             upload_sample = True
 
         elif not auto_generator:
@@ -271,27 +234,23 @@ def main():
             num_elements_per_entry = 6
 
             # Extract every 5th out of six values
-            parsed_values = [
-                bbox_values[i]
-                for i in range(4, len(bbox_values), num_elements_per_entry)
-            ]
+            parsed_values = [bbox_values[i] for i in range(4, len(bbox_values), num_elements_per_entry)]
 
             # Check if any of the values are below p_value and earmark result for retrieval
             for value in parsed_values:
                 if value < p_value:
-                    logging.debug("Parsed value: %.8f", value)
+                    logger.debug("Parsed value: %.8f", value)
                     upload_sample = True
 
         if upload_sample:
-            logging.debug("uploading sample")
+            logger.debug("uploading sample")
             # Parse image information
             image_header = msgpack.unpackb(image_header)
 
             # Read image
-            image_data = communication_utils.read_shm(image_header["SHMKey"])
-            with Image.frombytes(
-                "RGB", (image_header["Width"], image_header["Height"]), image_data
-            ) as image:
+            shared_memory = nxai_communication_utils.SharedMemory(key=image_header["SHMKey"])
+            image_data = shared_memory.read()
+            with Image.frombytes("RGB", (image_header["Width"], image_header["Height"]), image_data) as image:
                 with io.BytesIO() as output:
                     image.save(output, format="JPEG")
                     output.seek(0)
@@ -299,7 +258,7 @@ def main():
             if len(samples_buffer) >= samples_buffer_flush_size:
                 send_samples_buffer()
         else:
-            logging.debug("skipping sample")
+            logger.debug("skipping sample")
 
         if return_data:
             # Create msgpack formatted message
@@ -307,17 +266,13 @@ def main():
             for key in parsed_response["Outputs"]:
                 value = parsed_response["Outputs"][key]
                 if data_types[0] == 1:
-                    parsed_response["Outputs"][key] = struct.pack(
-                        "f" * len(value), *value
-                    )
+                    parsed_response["Outputs"][key] = struct.pack("f" * len(value), *value)
                 elif data_types[0] == 3:
-                    parsed_response["Outputs"][key] = struct.pack(
-                        "b" * len(value), *value
-                    )
+                    parsed_response["Outputs"][key] = struct.pack("b" * len(value), *value)
             message_bytes = msgpack.packb(parsed_response)
 
             # Send message back to runtime
-            communication_utils.sendMessageOverConnection(connection, message_bytes)
+            connection.send(message_bytes)
 
 
 if __name__ == "__main__":
@@ -326,22 +281,20 @@ if __name__ == "__main__":
     config()
 
     logger.info("Initializing example plugin")
-    logging.debug("Input parameters: " + str(sys.argv))
+    logger.debug("Input parameters: " + str(sys.argv))
 
     if edge_impulse_api_key == default_edge_impulse_api_key:
-        logging.error("Edge Impulse Key is not set yet", exc_info=True)
+        logger.error("Edge Impulse Key is not set yet", exc_info=True)
         exit()
     else:
-        logging.debug("Edge Impulse Key: " + edge_impulse_api_key)
+        logger.debug("Edge Impulse Key: " + edge_impulse_api_key)
 
     # Parse input arguments
     if len(sys.argv) > 1:
         Postprocessor_Socket_Path = sys.argv[1]
-    # Handle interrupt signals
-    signal.signal(signal.SIGTERM, signal_handler)
 
     # Start program
     try:
         main()
     except Exception as e:
-        logging.error(e, exc_info=True)
+        logger.error(e, exc_info=True)
