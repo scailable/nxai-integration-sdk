@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.31)
+cmake_minimum_required(VERSION 3.30)
 
 project(nxai-integration-examples)
 
@@ -45,6 +45,9 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/postprocessor-python-example)
 
 ## Add Image Postprocessor Python project
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/postprocessor-python-image-example)
+
+## Add ANPR Example Postprocessor Python project
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/postprocessor-python-anpr-example)
 
 ## Add Confidence Postprocessor Python project
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/postprocessor-python-confidences-example)

@@ -20,7 +20,7 @@ LOG_FILE = os.path.join(script_location, "..", "etc", "plugin.image.log")
 # 1. Create a logger
 logger = logging.getLogger(__name__)
 # The Logger level must be DEBUG so it passes all messages to the handlers
-logger.setLevel(logging.DEBUG) 
+logger.setLevel(logging.DEBUG)
 
 # 2. Create the Format
 formatter = logging.Formatter("%(asctime)s - %(levelname)s - example - %(message)s")
@@ -43,9 +43,8 @@ logger.addHandler(handler_file)
 
 import nxai_communication_utils
 
-# The name of the postprocessor...
-Postprocessor_Name = "Python-Image-Example-Postprocessor"
-Postprocessor_Socket_Path = os.path.join(tempfile.gettempdir(),"python-image-postprocessor.sock")
+
+Postprocessor_Socket_Path = os.path.join(tempfile.gettempdir(), "python-image-postprocessor.sock")
 
 global shared_memory
 shared_memory = None
@@ -86,7 +85,7 @@ def config():
 
 def set_file_log_level(level):
     """
-    Updates ONLY the file handler level. 
+    Updates ONLY the file handler level.
     Stdout remains at DEBUG because its handler isn't touched.
     """
     try:
@@ -94,7 +93,7 @@ def set_file_log_level(level):
         numeric_level = getattr(logging, level.upper(), None)
         if not isinstance(numeric_level, int):
             raise ValueError(f'Invalid log level: {level}')
-        
+
         handler_file.setLevel(numeric_level)
         logger.info(f"File logging level set to: {level}")
     except Exception as e:

@@ -115,7 +115,7 @@ sudo apt install patchelf
 Change into the directory created for the project if you're not already there.
 
 ```shell
-cd sclbl-integration-sdk/
+cd nxai-integration-sdk/
 ```
 
 Prepare the *build* directory in the project directory, and switch to the build directory.
