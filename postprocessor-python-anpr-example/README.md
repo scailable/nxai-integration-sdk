@@ -24,7 +24,7 @@ By default, the postprocessor expects:
 
 ## Example Models
 
-The `example_models` directory contains two ONNX models intended for use with this postprocessor in the AI Manager pipeline:
+The `example_models` directory at the repository root contains two ONNX models intended for use with this postprocessor in the AI Manager pipeline:
 
 - **License_Plate_Detector.onnx**: Detector model that produces bounding boxes for license plates. Use it as the detector in the pipeline; the postprocessor attaches the recognized text to these objects.
 - **License_Plate_OCR.onnx**: OCR model that produces raw character logits. Use it as the OCR model in the pipeline; the postprocessor decodes the logits and caches results by object ID.
@@ -206,7 +206,7 @@ When a **Detector Message** (containing bounding boxes) is received, the postpro
 
 ## AI Manager Integration
 
-To enable this postprocessor, you must configure it in the AI Manager pipeline settings for **both models** (the Detector and the OCR model). This is necessary because the postprocessor needs to receive messages from both to maintain its cache and update metadata. Example ONNX models are provided in the `example_models` directory (see **Example Models**).
+To enable this postprocessor, you must configure it in the AI Manager pipeline settings for **both models** (the Detector and the OCR model). This is necessary because the postprocessor needs to receive messages from both to maintain its cache and update metadata. Example ONNX models are provided in the `example_models` directory at the repository root (see **Example Models**).
 
 Add the postprocessor to `external_postprocessors.json`. Example full file contents:
 

@@ -58,6 +58,9 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/postprocessor-python-settings-examp
 ## Add Postprocessor Python Events project
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/postprocessor-python-events-example)
 
+## Add Postprocessor Python Measure Average Car Speed project
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/postprocessor-python-measure-average-car-speed)
+
 ## Add Postprocessor Python NoResponse project
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/postprocessor-python-noresponse-example)
 
