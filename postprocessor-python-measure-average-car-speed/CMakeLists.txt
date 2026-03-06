@@ -91,8 +91,6 @@ add_custom_target(${PROCESSOR_NAME} ALL
     DEPENDS nxai-c-utilities-shared
     COMMAND ${PIP_EXECUTABLE} install -r ../nxai-utilities/python-utilities/requirements.txt
     COMMAND ${PIP_EXECUTABLE} install -r requirements.txt
-    # Copy inference package to source directory
-    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_CURRENT_SOURCE_DIR}/../inference ${CMAKE_CURRENT_SOURCE_DIR}/inference
     # Copy files to source directory for easy compiling
     COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:nxai-c-utilities-shared> ${CMAKE_CURRENT_SOURCE_DIR}
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/../nxai-utilities/python-utilities/nxai_communication_utils.py ${CMAKE_CURRENT_SOURCE_DIR}
@@ -100,7 +98,6 @@ add_custom_target(${PROCESSOR_NAME} ALL
     # Clean up copied files
     COMMAND ${CMAKE_COMMAND} -E remove ${CMAKE_CURRENT_SOURCE_DIR}/nxai_communication_utils.py
     COMMAND ${CMAKE_COMMAND} -E remove $<TARGET_FILE_NAME:nxai-c-utilities-shared>
-    COMMAND ${CMAKE_COMMAND} -E remove_directory ${CMAKE_CURRENT_SOURCE_DIR}/inference
 )
 
 if(WIN32)
