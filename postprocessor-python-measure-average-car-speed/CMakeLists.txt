@@ -1,5 +1,5 @@
 # Add target to build everything at once
-set(PROCESSOR_NAME "postprocessor-python-anpr-example")
+set(PROCESSOR_NAME "postprocessor-python-measure-average-car-speed")
 
 # Create virtual environment in build directory
 find_package(Python REQUIRED)
@@ -58,7 +58,7 @@ if(WIN32)
         list(GET download_status 0 status_code)
         if(NOT status_code EQUAL 0)
             list(GET download_status 1 error_message)
-            message(FATAL_ERROR "Failed to download Dependency Walker: ${error_message}")
+            message(FATAL_ERROR "Failed to download Dependency Walker: %{error_message}")
         endif()
 
         # 5. Create the final installation directory and extract the archive
