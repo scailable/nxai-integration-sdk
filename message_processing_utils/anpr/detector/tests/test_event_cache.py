@@ -1,4 +1,13 @@
+import os
+import sys
 import unittest
+
+_nxai_utilities = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "nxai-utilities")
+)
+if _nxai_utilities not in sys.path:
+    sys.path.insert(0, _nxai_utilities)
+
 from message_processing_utils.anpr.detector.event_cache import EventDeduplicationCache
 
 

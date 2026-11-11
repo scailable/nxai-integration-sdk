@@ -1,153 +1,186 @@
-import os
+"""
+Example NXAI postprocessor using the new SDK.
+
+This postprocessor receives detected objects and events from the NXAI runtime,
+adds a test object to demonstrate processing, and sends the modified results back.
+
+Configuration:
+  - Logs: written to stdout/stderr; the AI Manager writes them to the entry's LogFilepath
+  - Config: the Config keys of the registration entry, passed as launch arguments
+"""
+
 import sys
 import logging
-import configparser
-from pprint import pformat
+import uuid
+import nxai_postprocessor_sdk
 
-# Add the nxai-utilities python utilities
-script_location = os.path.dirname(sys.argv[0])
-sys.path.append(os.path.join(script_location, "../nxai-utilities/python-utilities"))
-import nxai_communication_utils
+# ============================================================================
+# Configuration
+# ============================================================================
 
+# Module-level logger
+logger = logging.getLogger(__name__)
 
-CONFIG_FILE = os.path.join(script_location, "..", "etc", "plugin.example.ini")
+PROCESSOR_NAME = "python-example"
 
-# Set up logging
-if os.path.exists(os.path.join(script_location, "..", "etc")):
-    LOG_FILE = os.path.join(script_location, "..", "etc", "plugin.example.log")
-else:
-    LOG_FILE = os.path.join(script_location, "plugin.example.log")
+# Config received from AI Manager
+global processor_config
 
-# Initialize plugin and logging, script makes use of INFO and DEBUG levels
-handler_stream = logging.StreamHandler(sys.stdout)
-handler_stream.setLevel(logging.DEBUG)
-handler_file = logging.FileHandler(filename=LOG_FILE, mode="w")
-handler_file.setLevel(logging.INFO)
+# Class of the injected object. Must match the sole Objects[].ID declared in this
+# example's external_postprocessors.json, and must be unique across every processor
+# registered on the server: the AI Manager merges all registered processors' Objects
+# into every device's manifest without deduplicating, so two processors sharing an ID
+# make the manifest report duplicate object types.
+INJECTED_CLASS = "python_example"
 
-logging.basicConfig(format="%(asctime)s - %(levelname)s - example - %(message)s", handlers=[handler_stream, handler_file])
+# UUID of the injected object's track, per device: assigned on the first
+# handle_message call for a device and reused on every subsequent call for it, so
+# the track persists across frames. Keyed by device because a track belongs to
+# the device that minted it -- the plugin resolves an incoming ID against that
+# device's own track table, so reusing one camera's ID on another is rejected
+# with "Could not find object ID" and the object is dropped.
+global test_track_ids
+test_track_ids = {}
 
-# The name of the postprocessor.
-# This is used to match the definition of the postprocessor with routing.
-Postprocessor_Name = "Python-Example-Postprocessor"
-
-# The socket this postprocessor will listen on.
-# This is always given as the first argument when the process is started
-# But it can be manually defined as well, as long as it is the same as the socket path in the runtime settings
-import tempfile
-Postprocessor_Socket_Path = os.path.join(tempfile.gettempdir(),"python-example-postprocessor.sock")
-
-# Data Types
-# 1:  //FLOAT
-# 2:  //UINT8
-# 3:  //INT8
-# 4:  //UINT16
-# 5:  //INT16
-# 6:  //INT32
-# 7:  //INT64
-# 8:  //STRING
-# 9:  //BOOL
-# 11: //DOUBLE
-# 12: //UINT32
-# 13: //UINT64
+# ============================================================================
+# Business Logic
+# ============================================================================
 
 
-def config():
-    logger.info("Reading configuration from:" + CONFIG_FILE)
+def handle_message(
+    msg: nxai_postprocessor_sdk.ObjectsPostProcessorMessage,
+) -> nxai_postprocessor_sdk.ObjectsPostProcessorMessage:
+    """Process a received message and return modified message.
 
-    try:
-        configuration = configparser.ConfigParser()
-        configuration.read(CONFIG_FILE)
+    Args:
+        msg: Parsed ObjectsPostProcessorMessage from NXAI runtime
 
-        configured_log_level = configuration.get("common", "debug_level", fallback="INFO")
-        set_log_level(configured_log_level)
+    Returns:
+        Modified ObjectsPostProcessorMessage to send back to runtime
+    """
 
-        for section in configuration.sections():
-            logger.info("config section: " + section)
-            for key in configuration[section]:
-                logger.info("config key: " + key + " = " + configuration[section][key])
+    logger.info(
+        f"Processing: device={msg.device_id}, "
+        f"{len(msg.objects)} object classes, {len(msg.events)} events"
+    )
+    logger.debug(f"Device: {msg.device_name}, Timestamp: {msg.timestamp}")
 
-    except Exception as e:
-        logger.error(e, exc_info=True)
+    # Example: add a test object under this example's own class
+    if INJECTED_CLASS not in msg.objects:
+        msg.objects[INJECTED_CLASS] = []
 
-    logger.debug("Read configuration done")
+    # Create a test object, continuing the same track across frames so the
+    # object persists in the analytics archive instead of flickering as a new
+    # single-frame track every time.
+    test_obj = nxai_postprocessor_sdk.ObjectMetadata()
+    test_track_id = test_track_ids.get(msg.device_id)
+    if test_track_id is None:
+        test_track_id = str(uuid.uuid4())
+        test_track_ids[msg.device_id] = test_track_id
+        test_obj.new_track_id = test_track_id  # create the track with our chosen UUID
+    else:
+        test_obj.track_id = test_track_id  # continue this device's existing track
+    test_obj.x = 0.1
+    test_obj.y = 0.1
+    test_obj.width = 0.3
+    test_obj.height = 0.3
+    test_obj.confidence = 0.95
+    test_obj.attributes["source"] = "postprocessor-example"
+
+    msg.objects[INJECTED_CLASS].append(test_obj)
+    logger.info(f"Added test object ")
+
+    return msg
 
 
-def set_log_level(level):
-    try:
-        logger.setLevel(logging.DEBUG)
-    except Exception as e:
-        logger.error(e, exc_info=True)
+def run_message_loop(processor: nxai_postprocessor_sdk.ExternalPostprocessor) -> None:
+    """Serve messages until the engine sends a graceful EXIT signal.
 
+    `wait_for_message()` returns None both on a plain timeout and on an IPC EXIT
+    signal; only `processor.exit_requested` tells them apart. A loop that just
+    `continue`s on None regardless of that flag never returns, and the AI Manager
+    kills the process after its grace period instead of it exiting cleanly.
 
-def main():
-    # Start socket listener to receive messages from NXAI runtime
-    server = nxai_communication_utils.SocketListener(Postprocessor_Socket_Path)
-
-    # Wait for messages in a loop
+    Args:
+        processor: An initialized ExternalPostprocessor.
+    """
     while True:
-        # Wait for input message from runtime
         logger.debug("Waiting for input message")
 
         try:
-            connection, input_message = server.accept()
-            logger.debug("Received input message")
-        except nxai_communication_utils.SocketTimeout:
-            # Request timed out. Continue waiting
-            continue
-        except nxai_communication_utils.SocketError as e:
-            logger.warning("An error occured while receiving a socket message:" + str(e))
-            continue
+            # Wait for message from server (timeout in milliseconds)
+            message_bytes = processor.wait_for_message(timeout_ms=5000)
 
-        # Parse input message
-        input_object = nxai_communication_utils.parseInferenceResults(input_message)
-        if isinstance(input_object, nxai_communication_utils.ExitSignal):
-            logger.info("Received exit signal.")
-            connection.close()
+            if message_bytes is None:
+                if processor.exit_requested:
+                    logger.info("Received graceful exit signal, shutting down")
+                    return
+                logger.debug("Timeout waiting for message")
+                continue
+
+            logger.debug(f"Received message ({len(message_bytes)} bytes)")
+
+            # Parse msgpack message into ObjectsPostProcessorMessage
+            objects_message = processor.parse_objects_message(message_bytes)
+            if objects_message is None:
+                logger.error("Failed to parse message")
+                continue
+
+            # Process message using business logic
+            processed_msg = handle_message(objects_message)
+
+            # Serialize message back to bytes
+            response_bytes = processor.write_objects_message(processed_msg)
+            if response_bytes is None:
+                logger.error("Failed to serialize message")
+                continue
+
+            # Send response back to server
+            if not processor.send_response(response_bytes):
+                logger.error("Failed to send response")
+                break
+
+            logger.debug("Response sent successfully")
+
+        except Exception as e:
+            logger.error(f"Error processing message: {e}", exc_info=True)
             break
 
-        # Use pformat to format the deep object
-        formatted_unpacked_object = pformat(input_object)
-        logger.debug(f"Unpacked:\n\n{formatted_unpacked_object}\n\n")
 
-        # Add extra bbox
-        if "BBoxes_xyxy" not in input_object:
-            input_object["BBoxes_xyxy"] = {}
-        input_object["BBoxes_xyxy"]["test"] = [100.0, 100.0, 400.0, 400.0]
-
-        logger.info("Added test bounding box to output")
-
-        # Write object back to string
-        output_message = nxai_communication_utils.writeInferenceResults(input_object)
-
-        # Send message back to runtime
-        connection.send(output_message)
-        connection.close()
+# ============================================================================
+# Main Entry Point
+# ============================================================================
 
 
 if __name__ == "__main__":
-    ## initialize the logger
-    logger = logging.getLogger(__name__)
+    # Set up logging using SDK utility
+    logger = nxai_postprocessor_sdk.setup_logging()
 
-    ## read configuration file if it's available
-    config()
+    # Load configuration using SDK utility
+    processor_config = nxai_postprocessor_sdk.load_config(sys.argv)
 
-    logger.info("Initializing example plugin")
-    logger.debug("Input parameters: " + str(sys.argv))
+    # Apply logging configuration if available
+    nxai_postprocessor_sdk.apply_config_logging(processor_config, logger)
 
-    # Parse input arguments
-    if len(sys.argv) > 1:
-        Postprocessor_Socket_Path = sys.argv[1]
+    # Log startup information
+    logger.info(f"Initializing '{processor_config.get('ProcessorName', PROCESSOR_NAME)}' postprocessor")
+    logger.debug(f"Command-line arguments: {sys.argv}")
 
-    # Start program
+    # Initialize ExternalPostprocessor from command-line arguments
+    processor = nxai_postprocessor_sdk.ExternalPostprocessor()
+    if not processor.initialize_from_args():
+        logger.error("Failed to initialize postprocessor from arguments")
+        sys.exit(1)
+
+    logger.info(f"Postprocessor '{processor.name}' initialized successfully")
+    logger.info("Waiting for messages from NXAI runtime...")
+
+    # Main message processing loop
     try:
-        main()
-    except Exception as e:
-        logger.error(e, exc_info=True)
+        run_message_loop(processor)
     except KeyboardInterrupt:
         logger.info("Exited with keyboard interrupt")
-
-    try:
-        os.unlink(Postprocessor_Socket_Path)
-    except OSError:
-        if os.path.exists(Postprocessor_Socket_Path):
-            logger.error("Could not remove socket file: " + Postprocessor_Socket_Path)
+    except Exception as e:
+        logger.error(f"Fatal error: {e}", exc_info=True)
+    finally:
+        logger.info("Postprocessor shutdown")

@@ -1,178 +1,121 @@
-import os
+"""
+Tensor Preprocessor (v5 SDK)
+
+Overrides the NMS-sensitivity tensor ("nms_sensitivity-") with a live
+UserSettings value before the frame reaches the model. All other tensors
+pass through unchanged.
+"""
+
+import struct
 import sys
 import logging
-import msgpack
-import configparser
-import struct
+import nxai_postprocessor_sdk
 
-# Add the nxai-utilities python utilities
-script_location = os.path.dirname(sys.argv[0])
-sys.path.append(os.path.join(script_location, "../nxai-utilities/python-utilities"))
-import nxai_communication_utils
+# ============================================================================
+# Configuration
+# ============================================================================
 
-CONFIG_FILE = os.path.join(script_location, "..", "etc", "plugin.tensor.pre.ini")
+logger = logging.getLogger(__name__)
 
-# Set up logging
-if os.path.exists(os.path.join(script_location, "..", "etc")):
-    LOG_FILE = os.path.join(script_location, "..", "etc", "plugin.tensor.pre.log")
-else:
-    LOG_FILE = os.path.join(script_location, "plugin.tensor.pre.log")
+PROCESSOR_NAME = "tensor-example"
+NMS_TENSOR_NAME = "nms_sensitivity-"
+DEFAULT_NMS_OVERRIDE = 0.8
 
-# Initialize plugin and logging, script makes use of INFO and DEBUG levels
-handler_stream = logging.StreamHandler(sys.stdout)
-handler_stream.setLevel(logging.DEBUG)
-handler_file = logging.FileHandler(filename=LOG_FILE, mode="w")
-handler_file.setLevel(logging.DEBUG)
-
-logging.basicConfig(format="%(asctime)s - %(levelname)s - example - %(message)s", handlers=[handler_stream, handler_file])
-
-# The socket this preprocessor will listen on.
-# This is always given as the first argument when the process is started
-# But it can be manually defined as well, as long as it is the same as the socket path in the runtime settings
-Preprocessor_Socket_Path = "/tmp/python-tensor-example-preprocessor.sock"
-
-# Define a single SHM object to share images back to AI Manager
-global output_shm
-output_shm = None
-
-global input_shm
-input_shm = None
+# ============================================================================
+# Business Logic
+# ============================================================================
 
 
-def parseTensorFromSHM(shm_key: int, external_settings: dict):
-    global input_shm
-    if input_shm is None:
-        input_shm = nxai_communication_utils.SharedMemory(key=shm_key)
-    ######### Get input tensor from SHM
-    tensor_raw_data = input_shm.read()
-    tensor_data = msgpack.unpackb(tensor_raw_data)
+def handle_message(msg: nxai_postprocessor_sdk.TensorMessage) -> nxai_postprocessor_sdk.TensorMessage:
+    """Overwrite the "nms_sensitivity-" tensor's data with the forwarded `nmsoverride` setting.
 
-    if tensor_data is None or isinstance(tensor_data, dict) == False or "Tensors" not in tensor_data:
-        logger.error("Invalid input tensor received. Ignoring.")
-        return 0
+    Args:
+        msg: Parsed TensorMessage from NXAI runtime.
 
-    ######## Get nms setting ( if any )
+    Returns:
+        The same message, with the NMS-sensitivity tensor's data replaced if
+        present. Absent -> no-op.
+    """
+    tensor = msg.tensors.get(NMS_TENSOR_NAME)
+    if tensor is None:
+        logger.debug(f"No '{NMS_TENSOR_NAME}' tensor in message; nothing to override")
+        return msg
 
-    new_nms_value = 0.8
-    if "externalprocessor.nmsoverride" in external_settings:
-        try:
-            new_nms_value = float(external_settings["externalprocessor.nmsoverride"])
-        except:
-            pass
+    # A single guard means the plugin no-ops cleanly on a not-yet-patched engine
+    # that forwards no settings (empty user_settings).
+    if "nmsoverride" in msg.user_settings:
+        nms_override = float(msg.user_settings["nmsoverride"])
+    else:
+        nms_override = DEFAULT_NMS_OVERRIDE
 
-    ######## Modify tensor as example
+    tensor.data = struct.pack("f", nms_override)
+    logger.debug(f"Overrode '{NMS_TENSOR_NAME}' with {nms_override}")
 
-    for tensor_name, _ in tensor_data["Tensors"].items():
-        logger.info("Got tensor name: " + str(tensor_name))
-        if tensor_name == "nms_sensitivity-":
-            # Set nms to new_nms_value
-            tensor_data["Tensors"][tensor_name] = struct.pack("f", new_nms_value)
-
-    ######## Write modified tensor to SHM
-
-    output_data = msgpack.packb(tensor_data)
-
-    global output_shm
-    if output_shm is None:
-        # Can reuse SHM ( if data is smaller or equal size ) or create new SHM and return ID
-        output_data_size = len(output_data)
-        output_shm = nxai_communication_utils.SharedMemory(size=output_data_size)
-        logger.info("Created SHM with Key: " + output_shm.key)
-
-    output_shm.write(output_data)
-
-    return output_shm.key
+    return msg
 
 
-def main():
-    # Start socket listener to receive messages from NXAI runtime
-    server = nxai_communication_utils.SocketListener(Preprocessor_Socket_Path)
-    # Wait for messages in a loop
+def run_message_loop(processor: nxai_postprocessor_sdk.ExternalPreprocessor) -> None:
+    """Serve messages until the engine sends a graceful EXIT signal.
+
+    `wait_for_message()` returns None both on a plain timeout and on an IPC EXIT
+    signal; only `processor.exit_requested` tells them apart. A loop that just
+    `continue`s on None regardless of that flag never returns, and the AI Manager
+    kills the process after its grace period instead of it exiting cleanly.
+
+    Args:
+        processor: An initialized ExternalPreprocessor.
+    """
     while True:
-        # Wait for input message from runtime
+        logger.debug("Waiting for input message")
         try:
-            connection, input_message = server.accept()
-        except nxai_communication_utils.SocketTimeout:
-            # Request timed out. Continue waiting
-            continue
-
-        tensor_header = msgpack.unpackb(input_message)
-        if "EXIT" in tensor_header:
-            # AI Manager sent exit signal
+            message_bytes = processor.wait_for_message(timeout_ms=5000)
+            if message_bytes is None:
+                if processor.exit_requested:
+                    logger.info("Received graceful exit signal, shutting down")
+                    return
+                logger.debug("Timeout waiting for message")
+                continue
+            logger.debug(f"Received message ({len(message_bytes)} bytes)")
+            tensor_message = processor.parse_tensor_message(message_bytes)
+            if tensor_message is None:
+                logger.error("Failed to parse message")
+                continue
+            processed_msg = handle_message(tensor_message)
+            response_bytes = processor.write_tensor_message(processed_msg)
+            if response_bytes is None:
+                logger.error("Failed to serialize message")
+                continue
+            if not processor.send_response(response_bytes):
+                logger.error("Failed to send response")
+                break
+            logger.debug("Response sent successfully")
+        except Exception as e:
+            logger.error(f"Error processing message: {e}", exc_info=True)
             break
-        print("EXAMPLE PREPROCESSOR: Received input message: ", tensor_header)
-
-        external_settings = {}
-        if "ExternalProcessorSettings" in tensor_header:
-            logger.info("Got settings: " + str(tensor_header["ExternalProcessorSettings"]))
-            external_settings = tensor_header["ExternalProcessorSettings"]
-
-        # Process image
-        output_shm_key = parseTensorFromSHM(tensor_header["SHMKEY"], external_settings)
-
-        if output_shm_key != 0:
-            tensor_header["SHMKEY"] = output_shm_key
-
-        # Write header to respond
-        output_message = msgpack.packb(tensor_header)
-
-        # Send message back to runtime
-        connection.send(output_message)
-        connection.close()
 
 
-def config():
-    logger.info("Reading configuration from:" + CONFIG_FILE)
-
-    try:
-        configuration = configparser.ConfigParser()
-        configuration.read(CONFIG_FILE)
-
-        configured_log_level = configuration.get("common", "debug_level", fallback="INFO")
-        set_log_level(configured_log_level)
-
-        for section in configuration.sections():
-            logger.info("config section: " + section)
-            for key in configuration[section]:
-                logger.info("config key: " + key + " = " + configuration[section][key])
-
-    except Exception as e:
-        logger.error(e, exc_info=True)
-
-    logger.debug("Read configuration done")
-
-
-def set_log_level(level):
-    try:
-        logger.setLevel(level)
-    except Exception as e:
-        logger.error(e, exc_info=True)
-
+# ============================================================================
+# Main Entry Point
+# ============================================================================
 
 if __name__ == "__main__":
-    print("EXAMPLE PREPROCESSOR: Input parameters: ", sys.argv)
-    # Parse input arguments
-    if len(sys.argv) > 1:
-        Preprocessor_Socket_Path = sys.argv[1]
+    logger = nxai_postprocessor_sdk.setup_logging()
+    processor_config = nxai_postprocessor_sdk.load_config(sys.argv)
+    nxai_postprocessor_sdk.apply_config_logging(processor_config, logger)
+    logger.info(f"Initializing '{processor_config.get('ProcessorName', PROCESSOR_NAME)}' preprocessor")
+    logger.debug(f"Command-line arguments: {sys.argv}")
 
-    ## initialize the logger
-    logger = logging.getLogger(__name__)
-
-    ## read configuration file if it's available
-    config()
-
-    logger.info("Initializing example plugin")
-    logger.debug("Input parameters: " + str(sys.argv))
-
+    processor = nxai_postprocessor_sdk.ExternalPreprocessor()
+    if not processor.initialize_from_args():
+        logger.error("Failed to initialize preprocessor from arguments")
+        sys.exit(1)
+    logger.info(f"Preprocessor '{processor.name}' initialized successfully")
+    logger.info("Waiting for messages from NXAI runtime...")
     try:
-        main()
-    except Exception as e:
-        logger.error(e, exc_info=True)
+        run_message_loop(processor)
     except KeyboardInterrupt:
         logger.info("Exited with keyboard interrupt")
-
-    try:
-        os.unlink(Preprocessor_Socket_Path)
-    except OSError:
-        if os.path.exists(Preprocessor_Socket_Path):
-            logger.error("Could not remove socket file: " + Preprocessor_Socket_Path)
+    except Exception as e:
+        logger.error(f"Fatal error: {e}", exc_info=True)
+    finally:
+        logger.info("Preprocessor shutdown")

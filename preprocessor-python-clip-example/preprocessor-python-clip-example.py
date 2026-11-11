@@ -1,192 +1,156 @@
-#!/usr/bin/env python3
-import numpy as np
-import numpy.core.multiarray
-import instant_clip_tokenizer
+"""
+CLIP Text Preprocessor (v5 SDK)
 
-import os
+Tokenizes up to five text prompts forwarded via UserSettings and writes them
+into the "text" tensor as CLIP token ids, so a chained CLIP model can score
+the frame against the operator-configured prompts. The engine never builds a
+"text" tensor of its own, so the tensor is appended when absent. All other
+tensors pass through unchanged.
+"""
+
+import struct
 import sys
 import logging
-import msgpack
-import configparser
-import struct
 
-# Add the nxai-utilities python utilities
-script_location = os.path.dirname(sys.argv[0])
-sys.path.append(os.path.join(script_location, "../nxai-utilities/python-utilities"))
-import nxai_communication_utils
+import numpy as np
+import instant_clip_tokenizer
+import nxai_postprocessor_sdk
 
-CONFIG_FILE = os.path.join(script_location, "..", "etc", "plugin.tensor.pre.ini")
+# ============================================================================
+# Configuration
+# ============================================================================
 
-# Set up logging
-if os.path.exists(os.path.join(script_location, "..", "etc")):
-    LOG_FILE = os.path.join(script_location, "..", "etc", "plugin.clip.pre.log")
-else:
-    LOG_FILE = os.path.join(script_location, "plugin.clip.pre.log")
+logger = logging.getLogger(__name__)
 
-# Initialize plugin and logging, script makes use of INFO and DEBUG levels
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - example - %(message)s",
-    filename=LOG_FILE,
-    filemode="w",
-)
-
-# The socket this preprocessor will listen on.
-# This is always given as the first argument when the process is started
-# But it can be manually defined as well, as long as it is the same as the socket path in the runtime settings
-Preprocessor_Socket_Path = "/tmp/example-clip-preprocessor.sock"
-
-# Define a single SHM object to share images back to AI Manager
-global output_shm
-output_shm = None
+PROCESSOR_NAME = "clip-example"
+TEXT_TENSOR_NAME = "text"
+PROMPT_COUNT = 5
+TOKEN_CONTEXT_LENGTH = 77
 
 tokenizer = instant_clip_tokenizer.Tokenizer()
 
-
-def parseTensorFromSHM(shm_key: str, external_settings: dict):
-
-    ######### Get input tensor from SHM
-    logger.info("Got shm key: " + shm_key)
-    try:
-        shared_memory = nxai_communication_utils.SharedMemory(key=shm_key)
-        tensor_raw_data = shared_memory.read()
-    except Exception:
-        logger.error("Could not read SHM!")
-        return 0
-    tensor_data = msgpack.unpackb(tensor_raw_data)
-
-    logger.info("Got external_settings: " + str(external_settings))
-    if tensor_data is None or isinstance(tensor_data, dict) == False or "Tensors" not in tensor_data:
-        logger.error("Invalid input tensor received. Ignoring.")
-        return 0
-
-    for tensor_name, _ in tensor_data["Tensors"].items():
-        logger.info("Got tensor name: " + str(tensor_name))
-        if tensor_name == "text":
-            # Get text classes from settings
-            prompts = []
-            settings_names = sorted(list(external_settings.keys()))
-            for setting_name in settings_names:
-                if setting_name.startswith("externalprocessor.prompt"):
-                    prompts.append(external_settings[setting_name])
-            # Make sure there are enough prompts
-            while len(prompts) != 5:
-                prompts.append("")
-            logger.info("Got prompts: " + str(prompts))
-            # Tokenize prompts
-            text_tokens_np = np.array(tokenizer.tokenize_batch(prompts, context_length=77), dtype=np.int32)
-            # Pack the numpy array into a binary structure.
-            # Use the flattened array so that we pack all integers.
-            text_tokens_np_struct = struct.pack(f"{text_tokens_np.size}i", *text_tokens_np.flatten())
-            logger.info("After struct")
-            tensor_data["Tensors"][tensor_name] = text_tokens_np_struct
-
-    ######## Write modified tensor to SHM
-
-    output_data = msgpack.packb(tensor_data)
-
-    global output_shm
-    if output_shm is None:
-        # Can reuse SHM ( if data is smaller or equal size ) or create new SHM and return ID
-        output_data_size = len(output_data)
-        output_shm = nxai_communication_utils.SharedMemory(size=output_data_size)
-        logger.info("Created SHM with Key: " + output_shm.key)
-
-    output_shm.write(output_data)
-
-    return output_shm.key
+# ============================================================================
+# Business Logic
+# ============================================================================
 
 
-def main():
-    # Start socket listener to receive messages from NXAI runtime
-    server = nxai_communication_utils.SocketListener(Preprocessor_Socket_Path)
-    # Wait for messages in a loop
+def handle_message(msg: nxai_postprocessor_sdk.TensorMessage) -> nxai_postprocessor_sdk.TensorMessage:
+    """Tokenize the forwarded prompts and overwrite the "text" tensor's data.
+
+    Args:
+        msg: Parsed TensorMessage from NXAI runtime.
+
+    Returns:
+        The same message, carrying a "text" tensor filled with the tokenized
+        prompts. The tensor is appended when the engine did not supply it.
+    """
+    expected_shape = [PROMPT_COUNT, TOKEN_CONTEXT_LENGTH]
+
+    tensor = msg.tensors.get(TEXT_TENSOR_NAME)
+    if tensor is None:
+        # The engine builds input tensors by manifest name and only ever
+        # materializes "image-", "mask-" and "nms_sensitivity-", so the "text"
+        # input a chained CLIP model declares never arrives. Append it
+        # ourselves: the engine rebuilds the whole tensor array from our
+        # response, so an added tensor does reach the runtime.
+        logger.debug(f"No '{TEXT_TENSOR_NAME}' tensor in message; appending one")
+        tensor = nxai_postprocessor_sdk.TensorMetadata()
+        tensor.name = TEXT_TENSOR_NAME
+        tensor.shape = expected_shape
+        tensor.data_type = nxai_postprocessor_sdk.DATA_TYPE_INT32
+        msg.tensors[TEXT_TENSOR_NAME] = tensor
+    elif (
+        list(tensor.shape) != expected_shape
+        or tensor.data_type != nxai_postprocessor_sdk.DATA_TYPE_INT32
+    ):
+        # The [PROMPT_COUNT, TOKEN_CONTEXT_LENGTH] int32 shape is a contract
+        # this example imposes on the chained model, not something it reads off
+        # the tensor (see the README).
+        # Writing our tokens into a differently shaped tensor would corrupt the
+        # model's input silently, so refuse instead and say what was expected.
+        logger.error(
+            f"'{TEXT_TENSOR_NAME}' tensor does not match the contract this example expects: "
+            f"wanted shape {expected_shape} and data_type "
+            f"{nxai_postprocessor_sdk.DATA_TYPE_INT32} (int32), "
+            f"got shape {list(tensor.shape)} and data_type {tensor.data_type}; "
+            "leaving the tensor untouched"
+        )
+        return msg
+
+    prompts = [msg.user_settings.get(f"prompt{i}", "") for i in range(1, PROMPT_COUNT + 1)]
+    logger.debug(f"Tokenizing prompts: {prompts}")
+
+    text_tokens = np.array(
+        tokenizer.tokenize_batch(prompts, context_length=TOKEN_CONTEXT_LENGTH), dtype=np.int32
+    )
+    tensor.data = struct.pack(f"{text_tokens.size}i", *text_tokens.flatten())
+    logger.debug(f"Wrote {text_tokens.size} tokens into '{TEXT_TENSOR_NAME}'")
+
+    return msg
+
+
+def run_message_loop(processor: nxai_postprocessor_sdk.ExternalPreprocessor) -> None:
+    """Serve messages until the engine sends a graceful EXIT signal.
+
+    `wait_for_message()` returns None both on a plain timeout and on an IPC EXIT
+    signal; only `processor.exit_requested` tells them apart. A loop that just
+    `continue`s on None regardless of that flag never returns, and the AI Manager
+    kills the process after its grace period instead of it exiting cleanly.
+
+    Args:
+        processor: An initialized ExternalPreprocessor.
+    """
     while True:
-        # Wait for input message from runtime
+        logger.debug("Waiting for input message")
         try:
-            connection, input_message = server.accept()
-        except nxai_communication_utils.SocketTimeout:
-            # Request timed out. Continue waiting
-            continue
-
-        tensor_header = msgpack.unpackb(input_message)
-        if "EXIT" in tensor_header:
-            # AI Manager sent exit signal
+            message_bytes = processor.wait_for_message(timeout_ms=5000)
+            if message_bytes is None:
+                if processor.exit_requested:
+                    logger.info("Received graceful exit signal, shutting down")
+                    return
+                logger.debug("Timeout waiting for message")
+                continue
+            logger.debug(f"Received message ({len(message_bytes)} bytes)")
+            tensor_message = processor.parse_tensor_message(message_bytes)
+            if tensor_message is None:
+                logger.error("Failed to parse message")
+                continue
+            processed_msg = handle_message(tensor_message)
+            response_bytes = processor.write_tensor_message(processed_msg)
+            if response_bytes is None:
+                logger.error("Failed to serialize message")
+                continue
+            if not processor.send_response(response_bytes):
+                logger.error("Failed to send response")
+                break
+            logger.debug("Response sent successfully")
+        except Exception as e:
+            logger.error(f"Error processing message: {e}", exc_info=True)
             break
-        print("EXAMPLE PREPROCESSOR: Received input message: ", tensor_header)
-
-        external_settings = {}
-        if "ExternalProcessorSettings" in tensor_header:
-            logger.info("Got settings: " + str(tensor_header["ExternalProcessorSettings"]))
-            external_settings = tensor_header["ExternalProcessorSettings"]
-
-        # Process image
-        output_shm_key = parseTensorFromSHM(tensor_header["SHMKEY"], external_settings)
-
-        if output_shm_key != 0:
-            tensor_header["SHMKEY"] = output_shm_key
-
-        # Write header to respond
-        output_message = msgpack.packb(tensor_header)
-
-        # Send message back to runtime
-        connection.send(output_message)
-        connection.close()
 
 
-def config():
-    logger.info("Reading configuration from:" + CONFIG_FILE)
-
-    try:
-        configuration = configparser.ConfigParser()
-        configuration.read(CONFIG_FILE)
-
-        configured_log_level = configuration.get("common", "debug_level", fallback="INFO")
-        set_log_level(configured_log_level)
-
-        for section in configuration.sections():
-            logger.info("config section: " + section)
-            for key in configuration[section]:
-                logger.info("config key: " + key + " = " + configuration[section][key])
-
-    except Exception as e:
-        logger.error(e, exc_info=True)
-
-    logger.debug("Read configuration done")
-
-
-def set_log_level(level):
-    try:
-        logger.setLevel(level)
-    except Exception as e:
-        logger.error(e, exc_info=True)
-
+# ============================================================================
+# Main Entry Point
+# ============================================================================
 
 if __name__ == "__main__":
-    print("EXAMPLE PREPROCESSOR: Input parameters: ", sys.argv)
-    # Parse input arguments
-    if len(sys.argv) > 1:
-        Preprocessor_Socket_Path = sys.argv[1]
+    logger = nxai_postprocessor_sdk.setup_logging()
+    processor_config = nxai_postprocessor_sdk.load_config(sys.argv)
+    nxai_postprocessor_sdk.apply_config_logging(processor_config, logger)
+    logger.info(f"Initializing '{processor_config.get('ProcessorName', PROCESSOR_NAME)}' preprocessor")
+    logger.debug(f"Command-line arguments: {sys.argv}")
 
-    ## initialize the logger
-    logger = logging.getLogger(__name__)
-
-    ## read configuration file if it's available
-    config()
-
-    logger.info("Initializing example plugin")
-    logger.debug("Input parameters: " + str(sys.argv))
-
-    # Start program
+    processor = nxai_postprocessor_sdk.ExternalPreprocessor()
+    if not processor.initialize_from_args():
+        logger.error("Failed to initialize preprocessor from arguments")
+        sys.exit(1)
+    logger.info(f"Preprocessor '{processor.name}' initialized successfully")
+    logger.info("Waiting for messages from NXAI runtime...")
     try:
-        main()
-    except Exception as e:
-        logger.error(e, exc_info=True)
+        run_message_loop(processor)
     except KeyboardInterrupt:
         logger.info("Exited with keyboard interrupt")
-
-    try:
-        os.unlink(Preprocessor_Socket_Path)
-    except OSError:
-        if os.path.exists(Preprocessor_Socket_Path):
-            logger.error("Could not remove socket file: " + Preprocessor_Socket_Path)
+    except Exception as e:
+        logger.error(f"Fatal error: {e}", exc_info=True)
+    finally:
+        logger.info("Preprocessor shutdown")

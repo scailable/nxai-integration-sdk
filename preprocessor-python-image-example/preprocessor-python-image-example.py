@@ -1,181 +1,145 @@
-import os
-import sys
-import msgpack
+"""
+Image Preprocessor (v5 SDK)
+
+Mirrors the input image at full resolution before it reaches the rest of
+the AI Manager's own preprocessing pipeline (resize/normalize/cast).
+Disabled, the image passes through unchanged.
+
+The payload is uint8 RGB at source resolution, laid out HWC or CHW per
+`image.layout` -- a live v5 engine delivers CHW. Decoding it into a Pillow
+image and mirroring with `ImageOps.mirror` keeps the pixel logic in one
+well-tested library call instead of hand-rolled byte slicing; Pillow's and
+numpy's own operations run in C, so this stays well inside the engine's IPC
+window at full resolution.
+"""
+
 import logging
-import configparser
+import sys
 
-# Add the nxai-utilities python utilities
-script_location = os.path.dirname(sys.argv[0])
-sys.path.append(os.path.join(script_location, "../nxai-utilities/python-utilities"))
-import nxai_communication_utils
+import numpy as np
+from PIL import Image, ImageOps
 
-CONFIG_FILE = os.path.join(script_location, "..", "etc", "plugin.image.pre.ini")
+import nxai_postprocessor_sdk
 
-# Set up logging
-if os.path.exists(os.path.join(script_location, "..", "etc")):
-    LOG_FILE = os.path.join(script_location, "..", "etc", "plugin.image.pre.log")
-else:
-    LOG_FILE = os.path.join(script_location, "plugin.image.pre.log")
+# ============================================================================
+# Configuration
+# ============================================================================
 
-# Initialize plugin and logging, script makes use of INFO and DEBUG levels
-handler_stream = logging.StreamHandler(sys.stdout)
-handler_stream.setLevel(logging.DEBUG)
-handler_file = logging.FileHandler(filename=LOG_FILE, mode="w")
-handler_file.setLevel(logging.DEBUG)
+logger = logging.getLogger(__name__)
 
-logging.basicConfig(format="%(asctime)s - %(levelname)s - example - %(message)s", handlers=[handler_stream, handler_file])
+PROCESSOR_NAME = "image-example"
+DEFAULT_MIRROR_IMAGE = True
+_CHANNELS = 3
 
-# The socket this preprocessor will listen on.
-# This is always given as the first argument when the process is started
-# But it can be manually defined as well, as long as it is the same as the socket path in the runtime settings
-Preprocessor_Socket_Path = "/tmp/example-image-preprocessor.sock"
-
-# Define a single SHM object to share images back to AI Manager
-global output_shm, input_shm
-output_shm = None
-input_shm = None
+# ============================================================================
+# Business Logic
+# ============================================================================
 
 
-def parseImageFromSHM(shm_key: str, width: int, height: int, channels: int, external_settings: dict):
-    # Read image data from the shared memory
-    global input_shm
-    if input_shm is None:
-        input_shm = nxai_communication_utils.SharedMemory(key=shm_key)
-    image_data = input_shm.read()
+def handle_message(msg: nxai_postprocessor_sdk.ImagePreprocessorMessage) -> nxai_postprocessor_sdk.ImagePreprocessorMessage:
+    """Mirror `msg.image` horizontally at its input resolution.
 
-    # Check settings if image should be mirrored
-    mirror_image = True
-    if "externalprocessor.mirrorimage" in external_settings:
-        mirror_image = external_settings["externalprocessor.mirrorimage"] == "true"
+    Args:
+        msg: Parsed ImagePreprocessorMessage from NXAI runtime.
 
-    if mirror_image is True:
-        # Create new output image
-        output_image = bytearray(len(image_data))
-        new_width = int(width / 2)
-        new_height = int(height / 2)
-        # Mirror and downscale image
-        for h_key in range(0, height, 2):
-            for w_key in range(0, width, 2):
-                output_pixel_index = int(((h_key * width / 4) * channels) + ((w_key / 2) * channels))
-                input_pixel_index = (h_key * width * channels) + ((width - w_key) * channels)
-                output_image[output_pixel_index : output_pixel_index + channels] = image_data[input_pixel_index : input_pixel_index + channels]
+    Returns:
+        The same message. If the forwarded `mirrorimage` setting is enabled
+        (falling back to `DEFAULT_MIRROR_IMAGE` when the engine forwards no
+        settings), `msg.image` is replaced with a horizontal mirror at
+        unchanged width and height; otherwise the image passes through
+        unchanged.
+    """
+    logger.debug(f"UserSettings received: {msg.user_settings!r}")
+    if "mirrorimage" in msg.user_settings:
+        mirror_image = str(msg.user_settings["mirrorimage"]).lower() == "true"
     else:
-        # Return unmodified iamge
-        output_image = image_data
-        new_width = width
-        new_height = height
+        mirror_image = DEFAULT_MIRROR_IMAGE
 
-    global output_shm
-    if output_shm is None:
-        # Can reuse SHM ( if data is smaller or equal size ) or create new SHM and return ID
-        output_data_size = len(output_image)
-        output_shm = nxai_communication_utils.SharedMemory(size=output_data_size)
-        logger.info("Created SHM with Key: " + output_shm.key)
-    output_shm.write(bytes(output_image))
+    if not mirror_image:
+        return msg
 
-    return output_shm.key, new_width, new_height, channels
+    image = msg.image
+    pixels = np.frombuffer(image.bytes, dtype=np.uint8)
+    chw = image.layout == nxai_postprocessor_sdk.ImageOrder.CHW
+    if chw:
+        # CHW is channels-planes-of-rows; Pillow wants interleaved HWC, so
+        # transpose to a view in that order and transpose back afterward.
+        pixels = pixels.reshape(_CHANNELS, image.height, image.width).transpose(1, 2, 0)
+    else:
+        pixels = pixels.reshape(image.height, image.width, _CHANNELS)
+
+    mirrored = np.asarray(ImageOps.mirror(Image.fromarray(pixels, mode="RGB")))
+    if chw:
+        mirrored = mirrored.transpose(2, 0, 1)
+
+    image.bytes = mirrored.tobytes()
+    logger.debug(f"Mirrored image: {image.width}x{image.height}, layout {image.layout!r}")
+
+    return msg
 
 
-def main():
-    # Start socket listener to receive messages from NXAI runtime
-    server = nxai_communication_utils.SocketListener(Preprocessor_Socket_Path)
-    # Wait for messages in a loop
+def run_message_loop(processor: nxai_postprocessor_sdk.ExternalPreprocessor) -> None:
+    """Serve messages until the engine sends a graceful EXIT signal.
+
+    `wait_for_message()` returns None both on a plain timeout and on an IPC EXIT
+    signal; only `processor.exit_requested` tells them apart. A loop that just
+    `continue`s on None regardless of that flag never returns, and the AI Manager
+    kills the process after its grace period instead of it exiting cleanly.
+
+    Args:
+        processor: An initialized ExternalPreprocessor.
+    """
     while True:
-        # Wait for input message from runtime
+        logger.debug("Waiting for input message")
         try:
-            connection, input_message = server.accept()
-        except nxai_communication_utils.SocketTimeout:
-            # Request timed out. Continue waiting
-            continue
-
-        image_header = msgpack.unpackb(input_message)
-        if "EXIT" in image_header:
-            # AI Manager sent exit signal
+            message_bytes = processor.wait_for_message(timeout_ms=5000)
+            if message_bytes is None:
+                if processor.exit_requested:
+                    logger.info("Received graceful exit signal, shutting down")
+                    return
+                logger.debug("Timeout waiting for message")
+                continue
+            logger.debug(f"Received message ({len(message_bytes)} bytes)")
+            image_message = processor.parse_image_message(message_bytes)
+            if image_message is None:
+                logger.error("Failed to parse message")
+                continue
+            processed_msg = handle_message(image_message)
+            response_bytes = processor.write_image_message(processed_msg)
+            if response_bytes is None:
+                logger.error("Failed to serialize message")
+                continue
+            if not processor.send_response(response_bytes):
+                logger.error("Failed to send response")
+                break
+            logger.debug("Response sent successfully")
+        except Exception as e:
+            logger.error(f"Error processing message: {e}", exc_info=True)
             break
-        print("EXAMPLE PREPROCESSOR: Received input message: ", image_header)
-
-        external_settings = {}
-        if "ExternalProcessorSettings" in image_header:
-            logger.info("Got settings: " + str(image_header["ExternalProcessorSettings"]))
-            external_settings = image_header["ExternalProcessorSettings"]
-
-        # Convert SHM Key to integer from string
-        shm_key = image_header["SHMKEY"]
-
-        # Process image
-        output_shm_key, width, height, channels = parseImageFromSHM(
-            shm_key,
-            image_header["Width"],
-            image_header["Height"],
-            image_header["Channels"],
-            external_settings,
-        )
-
-        image_header["SHMKEY"] = output_shm_key
-        image_header["Width"] = width
-        image_header["Height"] = height
-        image_header["Channels"] = channels
-
-        # Write header to respond
-        output_message = msgpack.packb(image_header)
-
-        # Send message back to runtime
-        connection.send(output_message)
-        connection.close()
 
 
-def config():
-    logger.info("Reading configuration from:" + CONFIG_FILE)
-
-    try:
-        configuration = configparser.ConfigParser()
-        configuration.read(CONFIG_FILE)
-
-        configured_log_level = configuration.get("common", "debug_level", fallback="INFO")
-        set_log_level(configured_log_level)
-
-        for section in configuration.sections():
-            logger.info("config section: " + section)
-            for key in configuration[section]:
-                logger.info("config key: " + key + " = " + configuration[section][key])
-
-    except Exception as e:
-        logger.error(e, exc_info=True)
-
-    logger.debug("Read configuration done")
-
-
-def set_log_level(level):
-    try:
-        logger.setLevel(level)
-    except Exception as e:
-        logger.error(e, exc_info=True)
-
+# ============================================================================
+# Main Entry Point
+# ============================================================================
 
 if __name__ == "__main__":
-    print("EXAMPLE PREPROCESSOR: Input parameters: ", sys.argv)
-    # Parse input arguments
-    if len(sys.argv) > 1:
-        Preprocessor_Socket_Path = sys.argv[1]
+    logger = nxai_postprocessor_sdk.setup_logging()
+    processor_config = nxai_postprocessor_sdk.load_config(sys.argv)
+    nxai_postprocessor_sdk.apply_config_logging(processor_config, logger)
+    logger.info(f"Initializing '{processor_config.get('ProcessorName', PROCESSOR_NAME)}' preprocessor")
+    logger.debug(f"Command-line arguments: {sys.argv}")
 
-    ## initialize the logger
-    logger = logging.getLogger(__name__)
-
-    ## read configuration file if it's available
-    config()
-
-    logger.info("Initializing example plugin")
-    logger.debug("Input parameters: " + str(sys.argv))
-
+    processor = nxai_postprocessor_sdk.ExternalPreprocessor()
+    if not processor.initialize_from_args():
+        logger.error("Failed to initialize preprocessor from arguments")
+        sys.exit(1)
+    logger.info(f"Preprocessor '{processor.name}' initialized successfully")
+    logger.info("Waiting for messages from NXAI runtime...")
     try:
-        main()
-    except Exception as e:
-        logger.error(e, exc_info=True)
+        run_message_loop(processor)
     except KeyboardInterrupt:
         logger.info("Exited with keyboard interrupt")
-
-    try:
-        os.unlink(Preprocessor_Socket_Path)
-    except OSError:
-        if os.path.exists(Preprocessor_Socket_Path):
-            logger.error("Could not remove socket file: " + Preprocessor_Socket_Path)
+    except Exception as e:
+        logger.error(f"Fatal error: {e}", exc_info=True)
+    finally:
+        logger.info("Preprocessor shutdown")

@@ -1,0 +1,22 @@
+[
+    {
+        "Name": "Tensor-NMS-Override",
+        "Command": "/path/to/build/preprocessor-python-tensor-example/preprocessor-python-tensor-example",
+        "Schedule": "TENSOR",
+        "LogFilepath": "/tmp/preprocess.tensor-example.stdout.log",
+        "Config": {
+            "LogLevel": "DEBUG"
+        },
+        "UserSettings": [
+            {
+                "type": "DoubleSpinBox",
+                "name": "nmsoverride",
+                "caption": "NMS Override",
+                "description": "Fixed value the NMS-sensitivity tensor is overridden with",
+                "defaultValue": 0.8,
+                "minValue": 0.0,
+                "maxValue": 1.0
+            }
+        ]
+    }
+]

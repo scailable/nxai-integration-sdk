@@ -1,7 +1,12 @@
 .vscode
 __pycache__
 build
+build-windows/
 *.spec
 .idea/
 nxai_venv
+venv/
 *.log
+.clangd
+snapshot_manifest.json
+nuitka-crash-report.xml

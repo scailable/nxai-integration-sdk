@@ -1,0 +1,5 @@
+nuitka>=2.0
+msgpack>=1.0.0
+numpy
+opencv-python-headless
+requests

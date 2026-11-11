@@ -1,4 +1,5 @@
 nuitka
-pillow
 msgpack
+pillow
+numpy
 edgeimpulse

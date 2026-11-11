@@ -1,0 +1,12 @@
+[
+    {
+        "Name": "NoResponse-Example",
+        "Command": "/path/to/build/postprocessor-python-noresponse-example/postprocessor-python-noresponse-example",
+        "Schedule": "OBJECTS",
+        "LogFilepath": "/tmp/postprocess.noresponse-example.stdout.log",
+        "NoResponse": true,
+        "Config": {
+            "LogLevel": "DEBUG"
+        }
+    }
+]

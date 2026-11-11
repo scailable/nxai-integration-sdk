@@ -1,0 +1,20 @@
+[
+    {
+        "Name": "Image-Mirror-Example",
+        "Command": "/path/to/build/preprocessor-python-image-example/preprocessor-python-image-example",
+        "Schedule": "IMAGE",
+        "LogFilepath": "/tmp/preprocess.image-example.stdout.log",
+        "Config": {
+            "LogLevel": "DEBUG"
+        },
+        "UserSettings": [
+            {
+                "type": "CheckBox",
+                "name": "mirrorimage",
+                "caption": "Mirror Image",
+                "description": "Mirror the input image before the rest of the pipeline sees it",
+                "defaultValue": true
+            }
+        ]
+    }
+]

@@ -1,0 +1,13 @@
+[
+    {
+        "Name": "EdgeImpulse",
+        "Command": "/path/to/build/postprocessor-python-edgeimpulse-example/postprocessor-python-edgeimpulse-example",
+        "Schedule": "OBJECTS",
+        "LogFilepath": "/tmp/postprocess.edgeimpulse.stdout.log",
+        "ReceiveInputImage": true,
+        "NoResponse": true,
+        "Config": {
+            "LogLevel": "DEBUG"
+        }
+    }
+]

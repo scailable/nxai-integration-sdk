@@ -1,0 +1,12 @@
+[
+    {
+        "Name": "BestShots-Example",
+        "Command": "/path/to/build/postprocessor-python-bestshots-example/postprocessor-python-bestshots-example",
+        "Schedule": "OBJECTS",
+        "LogFilepath": "/tmp/postprocess.bestshots-example.stdout.log",
+        "Config": {
+            "LogLevel": "DEBUG",
+            "emit_best_shots": "true"
+        }
+    }
+]

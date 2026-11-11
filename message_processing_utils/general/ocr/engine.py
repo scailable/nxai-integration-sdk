@@ -51,7 +51,7 @@ class LogitsOcrEngine:
 
     def decode_logits(self, ocr_logits):
         if ocr_logits is None:
-            logger.warning("No OCR logits found in BinaryOutputs or InferenceData")
+            logger.warning("No OCR logits found in Tensors")
             return None
         logger.debug("OCR logits shape: %s", ocr_logits.shape)
         logger.debug("OCR logits dtype: %s", ocr_logits.dtype)

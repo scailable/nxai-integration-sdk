@@ -1,14 +1,34 @@
-cmake_minimum_required(VERSION 3.30)
+cmake_minimum_required(VERSION 3.28)
 
 project(nxai-integration-examples)
 
 # Define common installation destinations
 if(WIN32)
+    # The Windows install tree is the mediaserver service account's local app data,
+    # keyed on the product's display names rather than its linux company id, and with
+    # no mediaserver/var level. Both products are supported, detected the same way the
+    # linux branch below detects them; override with:
+    #   cmake -DINSTALL_DEST_POSTPROCESSORS=<path> -DINSTALL_DEST_PREPROCESSORS=<path>
+    if(NOT DEFINED CACHE{INSTALL_DEST_POSTPROCESSORS} OR NOT DEFINED CACHE{INSTALL_DEST_PREPROCESSORS})
+        set(_NX_WIN_APP_DATA "C:\\Windows\\System32\\config\\systemprofile\\AppData\\Local")
+        set(_NX_METAVMS_BASE "${_NX_WIN_APP_DATA}\\Network Optix\\Network Optix MetaVMS Media Server")
+        set(_NX_WITNESS_BASE "${_NX_WIN_APP_DATA}\\Network Optix\\Network Optix Media Server")
+
+        if(EXISTS "${_NX_METAVMS_BASE}\\nx_ai_manager")
+            set(_NX_BASE "${_NX_METAVMS_BASE}")
+        elseif(EXISTS "${_NX_WITNESS_BASE}\\nx_ai_manager")
+            set(_NX_BASE "${_NX_WITNESS_BASE}")
+        else()
+            set(_NX_BASE "${_NX_METAVMS_BASE}")
+        endif()
+        message(STATUS "NX VMS base detected: ${_NX_BASE}")
+    endif()
+
     if(NOT DEFINED CACHE{INSTALL_DEST_POSTPROCESSORS})
-        set(INSTALL_DEST_POSTPROCESSORS "C:\\Windows\\System32\\config\\systemprofile\\AppData\\Local\\Network Optix\\Network Optix MetaVMS Media Server\\nx_ai_manager\\nxai_manager\\postprocessors" CACHE PATH "Installation destination for postprocessors")
+        set(INSTALL_DEST_POSTPROCESSORS "${_NX_BASE}\\nx_ai_manager\\postprocessors" CACHE PATH "Installation destination for postprocessors")
     endif()
     if(NOT DEFINED CACHE{INSTALL_DEST_PREPROCESSORS})
-        set(INSTALL_DEST_PREPROCESSORS "C:\\Windows\\System32\\config\\systemprofile\\AppData\\Local\\Network Optix\\Network Optix MetaVMS Media Server\\nx_ai_manager\\nxai_manager\\preprocessors" CACHE PATH "Installation destination for preprocessors")
+        set(INSTALL_DEST_PREPROCESSORS "${_NX_BASE}\\nx_ai_manager\\preprocessors" CACHE PATH "Installation destination for preprocessors")
     endif()
 else()
     # Auto-detect NX VMS installation. Supports both networkoptix-metavms (NX Meta) and
@@ -35,10 +55,10 @@ else()
     endif()
 
     if(NOT DEFINED CACHE{INSTALL_DEST_POSTPROCESSORS})
-        set(INSTALL_DEST_POSTPROCESSORS "${_NX_BASE}/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors/" CACHE PATH "Installation destination for postprocessors")
+        set(INSTALL_DEST_POSTPROCESSORS "${_NX_BASE}/mediaserver/var/nx_ai_manager/postprocessors/" CACHE PATH "Installation destination for postprocessors")
     endif()
     if(NOT DEFINED CACHE{INSTALL_DEST_PREPROCESSORS})
-        set(INSTALL_DEST_PREPROCESSORS "${_NX_BASE}/mediaserver/var/nx_ai_manager/nxai_manager/preprocessors/" CACHE PATH "Installation destination for preprocessors")
+        set(INSTALL_DEST_PREPROCESSORS "${_NX_BASE}/mediaserver/var/nx_ai_manager/preprocessors/" CACHE PATH "Installation destination for preprocessors")
     endif()
 endif()
 
@@ -50,66 +70,76 @@ if(MSVC)
     link_libraries(ws2_32)
 endif()
 
-# Add Scailable C Utilities for all subprojects
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/nxai-utilities)
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/nxai-utilities/include)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/nxai-utilities)
 
-# Add C Postprocessor project
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/postprocessor-c-example)
+# Add CPP Objects Postprocessor project
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/postprocessor-cpp-objects-example)
 
-## Add C Image Postprocessor project
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/postprocessor-c-image-example)
+# Add CPP Tensors Postprocessor project
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/postprocessor-cpp-tensors-example)
 
-## Add C Raw Postprocessor project
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/postprocessor-c-raw-example)
-
-## Add Postprocessor Python project
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/postprocessor-python-example)
 
-## Add Image Postprocessor Python project
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/postprocessor-python-image-example)
-
-## Add ANPR Example Postprocessor Python project
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/postprocessor-python-anpr-example)
-
-## Add Confidence Postprocessor Python project
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/postprocessor-python-confidences-example)
-
-## Add Settings Postprocessor Python project
+# Add Settings Postprocessor Python project
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/postprocessor-python-settings-example)
 
-## Add Postprocessor Python Events project
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/postprocessor-python-events-example)
-
-## Add Postprocessor Python Measure Average Car Speed project
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/postprocessor-python-measure-average-car-speed)
-
-## Add Postprocessor Python NoResponse project
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/postprocessor-python-noresponse-example)
-
-## Add EdgeImpulse Upload Postprocessor Python project
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/postprocessor-python-edgeimpulse-example)
-
-## Add Cloud Inference Postprocessor Python project
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/postprocessor-cloud-inference-example)
-
-# Add Clip Postprocessor Python project
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/postprocessor-python-clip-example)
-
-## Add Height Estimator Postprocessor Python project
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/postprocessor-python-height-estimator)
-
-## Add Object Counter Threshold Postprocessor Python project
+# Add Object Counter Threshold Postprocessor Python project
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/postprocessor-python-object-counter-threshold)
 
-## Add Web Dashboard Postprocessor Python project
+# Add BestShots Example Postprocessor Python project
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/postprocessor-python-bestshots-example)
+
+# Add Height Estimator Postprocessor Python project
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/postprocessor-python-height-estimator)
+
+# Add Web Dashboard Postprocessor Python project
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/postprocessor-python-web-dashboard)
 
-# Add Image Preprocessor Python project
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/preprocessor-python-image-example)
+# Add Image Example Postprocessor Python project
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/postprocessor-python-image-example)
+
+# Add Confidences Example Postprocessor Python project
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/postprocessor-python-confidences-example)
+
+# Add Events Example Postprocessor Python project
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/postprocessor-python-events-example)
+
+# Add NoResponse Example Postprocessor Python project
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/postprocessor-python-noresponse-example)
 
 # Add Tensor Preprocessor Python project
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/preprocessor-python-tensor-example)
 
-# Add Clip Preprocessor Python project
+# Add Image Preprocessor Python project
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/preprocessor-python-image-example)
+
+# Add CLIP Preprocessor Python project
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/preprocessor-python-clip-example)
+
+# Add ANPR Example Postprocessor Python project
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/postprocessor-python-anpr-example)
+
+# Add CLIP Postprocessor Python project
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/postprocessor-python-clip-example)
+
+# Add Measure Average Car Speed Postprocessor Python project
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/postprocessor-python-measure-average-car-speed)
+
+# Add Cloud Inference Postprocessor Python project
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/postprocessor-cloud-inference-example)
+
+# Add Edge Impulse Postprocessor Python project
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/postprocessor-python-edgeimpulse-example)
+
+# Add Objects Sender Postprocessor Python project
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/postprocessor-python-objects-sender)
+
+# End-to-end test harness. Builds on Linux and on Windows/MSVC, and every case inside it
+# is offered on both platforms; none is gated by platform.
+enable_testing()
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/tests/e2e)
+
+# The tests/vms-e2e directory is optional and Linux-only: it is added only where it exists.
+if(UNIX AND EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/vms-e2e)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/tests/vms-e2e)
+endif()

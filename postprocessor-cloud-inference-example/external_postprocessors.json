@@ -1,0 +1,13 @@
+[
+    {
+        "Name": "Cloud-Inference",
+        "Command": "/path/to/build/postprocessor-cloud-inference-example/postprocessor-cloud-inference-example",
+        "Schedule": "OBJECTS",
+        "LogFilepath": "/tmp/postprocess.cloud-inference.stdout.log",
+        "ReceiveInputImage": true,
+        "Config": {
+            "LogLevel": "DEBUG",
+            "image_path": "/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/postprocessors/face.png"
+        }
+    }
+]

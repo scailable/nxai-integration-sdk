@@ -1,0 +1,27 @@
+[
+    {
+        "Name": "Settings-Example",
+        "Command": "/path/to/build/postprocessor-python-settings-example/postprocessor-python-settings-example",
+        "Schedule": "OBJECTS",
+        "LogFilepath": "/tmp/postprocess.settings.stdout.log",
+        "Config": {
+            "LogLevel": "DEBUG"
+        },
+        "UserSettings": [
+            {
+                "type": "TextField",
+                "name": "attributeName",
+                "caption": "Attribute Name",
+                "description": "Name of the attribute to set on every detected object",
+                "defaultValue": "reviewed"
+            },
+            {
+                "type": "TextField",
+                "name": "attributeValue",
+                "caption": "Attribute Value",
+                "description": "Value of the attribute to set on every detected object",
+                "defaultValue": "true"
+            }
+        ]
+    }
+]

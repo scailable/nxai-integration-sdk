@@ -1,149 +1,95 @@
-Preprocessor Python Tensor Example
-=========================
+# Preprocessor Python Tensor Example
 
-This example application provides an example on how to create a Python based preprocessor that can be integrated with the NXAI AI Manager.
+A v5 pre-processor that overrides the NMS-sensitivity tensor before the frame
+reaches the model.
 
-This example receives a tensor from the AI Manager and will adjust the NMS sensitivity ( if present ).
+## What it does
 
-# Preprocessors Control Flow
+`handle_message` looks up the `"nms_sensitivity-"` tensor on the incoming
+`TensorMessage` and, if present, replaces its data with the forwarded
+`nmsoverride` UserSettings value, falling back to `DEFAULT_NMS_OVERRIDE` when
+the engine forwards no settings (a native-byte-order `float32`, matching both
+the tensor's existing `data_type` and the engine's own `memcpy` of tensor
+payloads):
 
-The normal control flow of a preprocessor is to receive a MessagePack binary message header from the AI Manager. This message will contain information on how to connect to a Shared Memory segment which contains a MessagePack encoded tensor structure which will be given to the model.
+```python
+tensor = msg.tensors.get(NMS_TENSOR_NAME)
+if tensor is not None:
+    if "nmsoverride" in msg.user_settings:
+        nms_override = float(msg.user_settings["nmsoverride"])
+    else:
+        nms_override = DEFAULT_NMS_OVERRIDE
 
-The AI Manager will send the tensor message after its internal preprocessing steps.
+    tensor.data = struct.pack("f", nms_override)
+```
 
-The external preprocessor could write back an altered tensor to the shared memory segment sent by the AI Manager, or create a new shared memory segment and write a new tensor to the new segment. 
+All other tensors pass through unchanged. When the tensor is absent, the
+processor no-ops.
 
-Finally, the external preprocessor sends back a message to the AI Manager, signalling that it's completed processing. This message contains the new or same shared memory ID. The AI Manager will read the tensor from the shared memory segment ID sent back to the AI Manager, and pass it to the model.
+## Behavior change from v4
 
-# Message schema
+- **`nmsoverride` is a live UserSettings value again**, read fresh from the
+  message every frame. The engine forwards preprocessor settings the same way it
+  forwards them to postprocessors: a root `UserSettings` map on the
+  TENSOR-schedule message. In v4 only launch-time `Config` carried them.
 
-Communication between the AI Manager and Tensor Preprocessor consists of two messages. A small header message is sent over socket, and a large tensor message is made available over SHM. When the header message is sent, the processor can assume that the tensor message is ready on the SHM. When the preprocessor responds with a header message over socket, the AI Manager will assume that processing is completed, and will copy back the SHM message.
+## Registration
 
-## Header message
-
-The header message sent to the external postprocessor is MessagePack encoded and contains information about the image and how to retrieve it through shared memory. In Json, this schema would look like:
+Add the processor to `external_preprocessors.json` (see the colocated
+`external_preprocessors.json` and `.claude/docs/external_postprocessors_json.md`):
 
 ```json
 {
-    "SHMKEY": <Key>,
-    "SHMID": <ID>,
-}
-```
-
-The header message sent back to the AI Manager should contain at least the SHMID field, whether the ID was changed or not.
-
-## Tensor message
-
-The tensor message can contain large amounts of binary data, and is therefore sent over shared memory as a MessagePack encoded tensor structure. In Json, this schema would look like:
-
-```json
-{
-    "Tensors": {"output_name1": [...], "output_name2": [...], ...},
-    "TensorsRanks": [rank1, rank2, ...],
-    "TensorShapes": [[shape1], [shape2], ...],
-    "TensorDataTypes": [dtype1, dtype2, ...]
-}
-```
-
-The tensor preprocessor is free to add, remove or edit tensors, as long as the tensors are compatible with the assigned model.
-
-# How to use
-
-Once compiled, copy the executable to an accessible directory. A convenience directory within the AI Manager installation is created for this purpose at `/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/preprocessors`.
-
-It's a good idea to make sure the application and settings file you add is readable and executable by the NXAI AI Manager. This can be achieved by running:
-
-```
-sudo chmod -R 777 /opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/preprocessors
-```
-
-## Defining the preprocessor
-
-Create a configuration file at
-```
-/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/preprocessors/external_preprocessors.json
-```
-for Linux, or
-```
-C:\Windows\System32\config\systemprofile\AppData\Local\Network Optix\Network Optix MetaVMS Media Server\nx_ai_manager\nxai_manager\preprocessors\external_preprocessors.json
-```
-for Windows, and add the details of your preprocessor to the root object of that file. For example: 
-
-``` json
-{
-    "externalPreprocessors": [
+    "Name": "Tensor-NMS-Override",
+    "Command": "/path/to/preprocessor-python-tensor-example",
+    "Schedule": "TENSOR",
+    "LogFilepath": "/tmp/preprocess.tensor-example.stdout.log",
+    "Config": {
+        "LogLevel": "DEBUG"
+    },
+    "UserSettings": [
         {
-            "Name":"Example-Tensor-Preprocessor",
-            "Command":"/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/preprocessors/preprocessor-python-tensor-example",
-            "SocketPath":"/tmp/example-preprocessor.sock",
-            "Schedule":"TENSOR",
-            "Settings": [
-                {
-                    "type": "DoubleSpinBox",
-                    "name": "externalprocessor.nmsoverride",
-                    "caption": "NMS Override",
-                    "description": "An example setting to override the NMS value of the model",
-                    "defaultValue": 3.5,
-                    "minValue": 0.1,
-                    "maxValue": 0.9,
-                    "isActive": false
-                }
-            ]
+            "type": "DoubleSpinBox",
+            "name": "nmsoverride",
+            "caption": "NMS Override",
+            "description": "Fixed value the NMS-sensitivity tensor is overridden with",
+            "defaultValue": 0.8,
+            "minValue": 0.0,
+            "maxValue": 1.0
         }
     ]
 }
 ```
-for Linux, and
-```json
-{
-    "externalPreprocessors": [
-        {
-            "Name":"Example-Tensor-Preprocessor",
-            "Command":"C:\\Windows\\System32\\config\\systemprofile\\AppData\\Local\\Network Optix\\Network Optix MetaVMS Media Server\\nx_ai_manager\\nxai_manager\\preprocessors\\preprocessor-python-tensor-example.exe",
-            "SocketPath":"C:\\Windows\\Temp\\example-tensor-preprocessor.sock",
-            "Schedule":"TENSOR",
-            "Settings": [
-                {
-                    "type": "DoubleSpinBox",
-                    "name": "externalprocessor.nmsoverride",
-                    "caption": "NMS Override",
-                    "description": "An example setting to override the NMS value of the model",
-                    "defaultValue": 3.5,
-                    "minValue": 0.1,
-                    "maxValue": 0.9,
-                    "isActive": false
-                }
-            ]
-        }
-    ]
-}
+
+Key points:
+
+- `Schedule: "TENSOR"` — the preprocessor runs after the frame has been
+  converted into the model's input tensor, and may add/remove/rename tensors.
+- `UserSettings` declares `nmsoverride` as a live control; the value is
+  delivered every frame in the root `UserSettings` map (bare/unprefixed name).
+- `Config` only carries `LogLevel`, the one launch-time key the SDK itself
+  consumes.
+- No `Objects` or `Events`: a preprocessor mutates model *input*, not the
+  objects/events response.
+
+## Build, test, install
+
+Build via the CMake tree:
+
+```shell
+mkdir -p build && cd build
+cmake ..
+cmake --build . --target preprocessor-python-tensor-example
+cmake --install . --component preprocessor-python-tensor-example
 ```
-For Windows.
 
-This tells the AI Manager about the preprocessor:
-- **Name** gives the preprocesor a name so it can be selected later
-- **Command** defines how to start the preprocessor
-- **SocketPath** tells the AI Manager where to send data to so the external preprocessor will receive it
-- **Schedule** controls during which stage of the preprocessing pipeline the data is passed to the external processor. See #Schedules
+Run the colocated unit tests:
 
-The socket path is always given as the first command line argument when the application is started. It is therefore best practice for the external preprocessor application to read its socket path from here, instead of defining the data twice.
+```shell
+cd preprocessor-python-tensor-example
+PYTHONPATH=../nxai-utilities python -m unittest test_preprocessor_python_tensor_example -v
+```
 
-## Schedules
+## Licence
 
-Schedules control during which stage of the processing pipeline the data will be passed to the external processor.
-
-Available schedules are:
-
-- **IMAGE**: The data will be passed to the external processor before any processing is done. The external processor will receive the raw image as it is received by the AI Manager. 
-The returned image, if any, will then be resized, normalized, and cast to the specifications of the model.
-- **TENSOR**: The data will be passed to the external processor after the image is processed. The external processor will receive a tensor structure containing the data of the processed image. 
-The external processor has the option of adding/removing/renaming tensors which will be passed to the model.
-
-
-## Selecting to the preprocessor
-
-If the preprocessor is defined correctly, its name should appear in the list of preprocessors in the NX Plugin settings. If it is selected in the plugin settings then the Edge AI Runtime will send data to the preprocessor and wait for its output.
-
-# Licence
-
-Copyright 2025, Network Optix, All rights reserved.
+Copyright 2026, Network Optix, All rights reserved.

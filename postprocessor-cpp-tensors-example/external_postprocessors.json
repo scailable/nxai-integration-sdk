@@ -1,0 +1,17 @@
+[
+    {
+        "Name": "postprocessor-cpp-tensors-example",
+        "Command": "/path/to/build/postprocessor-cpp-tensors-example/postprocessor-cpp-tensors-example",
+        "Schedule": "TENSOR",
+        "LogFilepath": "/tmp/postprocess.cpp-tensors.stdout.log",
+        "Objects": [
+            {
+                "ID": "cpp_tensors_example",
+                "Name": "C++ Tensors Example"
+            }
+        ],
+        "Config": {
+            "LogLevel": "DEBUG"
+        }
+    }
+]

@@ -1,0 +1,26 @@
+[
+    {
+        "Name": "Object-Counter-Threshold",
+        "Command": "/path/to/build/postprocessor-python-object-counter-threshold/postprocessor-python-object-counter-threshold",
+        "Schedule": "OBJECTS",
+        "LogFilepath": "/tmp/postprocess.object-counter-threshold.stdout.log",
+        "Config": {
+            "LogLevel": "DEBUG"
+        },
+        "UserSettings": [
+            {
+                "type": "SpinBox",
+                "name": "min_object_count",
+                "caption": "Minimum Object Count",
+                "description": "Fire the threshold event when the total detected object count meets or exceeds this value",
+                "defaultValue": 5
+            }
+        ],
+        "Events": [
+            {
+                "ID": "object.counter.threshold",
+                "Name": "Object count threshold exceeded"
+            }
+        ]
+    }
+]

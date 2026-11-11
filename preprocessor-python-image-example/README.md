@@ -1,164 +1,118 @@
-Preprocessor Python Image Example
-=========================
+# Preprocessor Python Image Example
 
-This example application provides an example on how to create a Python based preprocessor that can be integrated with the NXAI AI Manager.
+A v5 pre-processor that mirrors the input image horizontally, at full
+resolution, before it reaches the rest of the AI Manager's own
+preprocessing pipeline.
 
-This example reads an image from the AI Manager and will mirror the image horizontally. When this example is enabled, you should see the bounding boxes being mirrored with respect to the image.
+## What it does
 
-# Preprocessors Control Flow
+`handle_message` reads `msg.image` (an `ImageData` with `height`, `width`,
+`layout`, and raw `bytes`) and, when the forwarded `mirrorimage` UserSettings
+value is enabled (falling back to `DEFAULT_MIRROR_IMAGE` when the engine
+forwards no settings), replaces it with a true horizontal mirror at
+unchanged width and height.
 
-The normal control flow of a preprocessor is to receive a MessagePack binary message header from the AI Manager. This message will contain information on how to connect to a Shared Memory segment which contains the input image to the AI Manager.
+The payload is **uint8 RGB at source resolution**, one byte per channel. A
+live v5 engine delivers `CHW` (`channels` planes of `height` rows); Pillow
+wants interleaved `HWC`, so the buffer is reshaped and transposed into that
+order with numpy, mirrored with `ImageOps.mirror`, and transposed back for
+`CHW`:
 
-The AI Manager will send the input image to the external postprocessors before following any of its own preprocessing steps, such as resizing and normalization. This allows for the external postprocessor to operate on the original image before the rest of the pipeline. 
+```python
+pixels = np.frombuffer(image.bytes, dtype=np.uint8)
+chw = image.layout == nxai_postprocessor_sdk.ImageOrder.CHW
+if chw:
+    pixels = pixels.reshape(_CHANNELS, image.height, image.width).transpose(1, 2, 0)
+else:
+    pixels = pixels.reshape(image.height, image.width, _CHANNELS)
 
-The external preprocessor could write back an altered image to the shared memory segment sent by the AI Manager, or create a new shared memory segment and write a new image to the new segment. 
+mirrored = np.asarray(ImageOps.mirror(Image.fromarray(pixels, mode="RGB")))
+if chw:
+    mirrored = mirrored.transpose(2, 0, 1)
 
-Finally, the external postprocessor sends back a message to the AI Manager, signalling that it's completed processing. This message contains the new or same shared memory ID, image width, height and channels. These could be the same or changed. The AI Manager will read the image from the shared memory segment ID sent back to the AI Manager, and use the received image width, height and channels in the rest of the pipeline.
+image.bytes = mirrored.tobytes()
+```
 
-Only one external processor is started for all devices. This means that a single processor can combine data for multiple devices for deeper analysis.
+The reshape/transpose is a numpy view, not a copy, and Pillow's mirror runs in
+C, so this stays well inside the engine's IPC window at full
+resolution without any hand-rolled byte slicing.
 
-# MessagePack schema
+`Data` length always equals `Height * Width * channels`, matching the v5
+wire invariant (`.claude/docs/input_from_ai_manager.md`); `width` and
+`height` are unchanged. A live v5 engine delivers `CHW`, so mirroring only
+`HWC` made the setting a no-op on real frames; both layouts are
+handled now.
+
+When disabled, `msg` passes through unchanged. The engine then resizes,
+normalizes, and casts whatever image comes back to the model's input spec.
+
+## Behavior change from v4
+
+- **The mirror is a true horizontal mirror**, not v4's shifted one. v4's
+  source-column index was off by one (`width - w_key` instead of
+  `width - 1 - w_key`), which wrapped output column 0 across row boundaries.
+  v5 fixes this rather than porting the quirk byte-for-byte — a mirror that
+  reads across row boundaries is a defect, not a demonstrable feature.
+- **`mirrorimage` is a live UserSettings value again**, read fresh from the
+  message every frame. The engine forwards preprocessor settings the same way it
+  forwards them to postprocessors: a root `UserSettings` map on the
+  IMAGE-schedule message. In v4 only launch-time `Config` carried them.
+
+## Registration
+
+Add the processor to `external_preprocessors.json` (see the colocated
+`external_preprocessors.json` and `.claude/docs/external_postprocessors_json.md`):
 
 ```json
 {
-    "DeviceID": "<Device ID>",
-    "DeviceName": "<Device Name>",
-    "Timestamp": <Timestamp>,
-    "InputIndex": <Index>,
-    "Width": <Width>,
-    "Height": <Height>,
-    "BBoxes_xyxy": {
-        "<Class Name>": [<Float Coordinates>]
-        },
-    "ObjectsMetaData": {
-        <"Class Name">: {
-            "ObjectIDs": [
-                <16-byte UUID>,
-                <16-byte UUID>
-            ],
-            "AttributeKeys": [
-                [<Attribute Key>,<Attribute Key>],
-                [<Attribute Key>,<Attribute Key>]
-            ],
-            "AttributeValues": [
-                [<Attribute Value>,<Attribute Value>],
-                [<Attribute Value>,<Attribute Value>]
-            ]
-        }
+    "Name": "Image-Mirror-Example",
+    "Command": "/path/to/preprocessor-python-image-example",
+    "Schedule": "IMAGE",
+    "LogFilepath": "/tmp/preprocess.image-example.stdout.log",
+    "Config": {
+        "LogLevel": "DEBUG"
     },
-    "Scores": {
-        <"Class Name"> : <Score>
-    },
-    "ExternalProcessorSettings": {}
-}
- ```
-
-Some fields depend on which model is assigned. If a model outputs bounding boxes, the `BBoxes_xyxy` field will be present. If a model outputs scores, the `Scores` field will be present.
-
-The header message sent to the external postprocessor contains information about the image and how to retrieve it through shared memory. In Json, this schema would look like:
-
-```json
-{
-    "SHMKEY": <Key>,
-    "SHMID": <ID>,
-    "Width": <Width>,
-    "Height": <Height>,
-    "Channels": <Channels>
-}
-```
-
-The header message sent back to the AI Manager should contain all the same fields. The field values could be the same or changed.
-
-# How to use
-
-Once compiled, copy the executable to an accessible directory. A convenience directory within the AI Manager installation is created for this purpose at `/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/preprocessors`.
-
-It's a good idea to make sure the application and settings file you add is readable and executable by the NXAI AI Manager. This can be achieved by running:
-
-```
-sudo chmod -R 777 /opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/preprocessors
-```
-
-## Defining the preprocessor
-
-Create a configuration file at
-```
-/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/preprocessors/external_preprocessors.json
-```
-for Linux, or
-```
-C:\Windows\System32\config\systemprofile\AppData\Local\Network Optix\Network Optix MetaVMS Media Server\nx_ai_manager\nxai_manager\preprocessors\external_preprocessors.json
-```
-for Windows, and add the details of your preprocessor to the root object of that file. For example: 
-
-``` json
-{
-    "externalPreprocessors": [
+    "UserSettings": [
         {
-            "Name":"Example-Image-Preprocessor",
-            "Command":"/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/preprocessors/preprocessor-python-image-example",
-            "SocketPath":"/tmp/example-image-preprocessor.sock",
-            "Schedule":"IMAGE",
-            "Settings": [
-                {
-                    "type": "SwitchButton",
-                    "name": "externalprocessor.mirrorimage",
-                    "caption": "Mirror Image",
-                    "description": "When this switch is active the input image to the AI Manager will be mirrored.",
-                    "defaultValue": true
-                }
-            ]
+            "type": "CheckBox",
+            "name": "mirrorimage",
+            "caption": "Mirror Image",
+            "description": "Mirror the input image before the rest of the pipeline sees it",
+            "defaultValue": true
         }
     ]
 }
 ```
-for Linux, and
-```json
-{
-    "externalPreprocessors": [
-        {
-            "Name":"Example-Image-Preprocessor",
-            "Command":"C:\\Windows\\System32\\config\\systemprofile\\AppData\\Local\\Network Optix\\Network Optix MetaVMS Media Server\\nx_ai_manager\\nxai_manager\\preprocessors\\preprocessor-python-image-example.exe",
-            "SocketPath":"C:\\Windows\\Temp\\example-image-preprocessor.sock",
-            "Schedule":"IMAGE",
-            "Settings": [
-                {
-                    "type": "SwitchButton",
-                    "name": "externalprocessor.mirrorimage",
-                    "caption": "Mirror Image",
-                    "description": "When this switch is active the input image to the AI Manager will be mirrored.",
-                    "defaultValue": true
-                }
-            ]
-        }
-    ]
-}
+
+Key points:
+
+- `Schedule: "IMAGE"` — the preprocessor runs before any of the engine's own
+  preprocessing (resize/normalize/cast), and receives the raw input frame.
+- `UserSettings` declares `mirrorimage` as a live control; the value is
+  delivered every frame in the root `UserSettings` map (bare/unprefixed name).
+- `Config` only carries `LogLevel`, the one launch-time key the SDK itself
+  consumes.
+- No `Objects` or `Events`: a preprocessor mutates model *input*, not the
+  objects/events response.
+
+## Build, test, install
+
+Build via the CMake tree:
+
+```shell
+mkdir -p build && cd build
+cmake ..
+cmake --build . --target preprocessor-python-image-example
+cmake --install . --component preprocessor-python-image-example
 ```
-For Windows.
 
-This tells the AI Manager about the preprocessor:
-- **Name** gives the preprocesor a name so it can be selected later
-- **Command** defines how to start the preprocessor
-- **SocketPath** tells the AI Manager where to send data to so the external preprocessor will receive it
-- **Schedule** controls during which stage of the preprocessing pipeline the data is passed to the external processor. See #Schedules
+Run the colocated unit tests:
 
-The socket path is always given as the first command line argument when the application is started. It is therefore best practice for the external preprocessor application to read its socket path from here, instead of defining the data twice.
+```shell
+cd preprocessor-python-image-example
+PYTHONPATH=../nxai-utilities python -m unittest test_preprocessor_python_image_example -v
+```
 
-## Schedules
+## Licence
 
-Schedules control during which stage of the processing pipeline the data will be passed to the external processor.
-
-Available schedules are:
-
-- **IMAGE**: The data will be passed to the external processor before any processing is done. The external processor will receive the raw image as it is received by the AI Manager. 
-The returned image, if any, will then be resized, normalized, and cast to the specifications of the model.
-- **TENSOR**: The data will be passed to the external processor after the image is processed. The external processor will receive a tensor structure containing the data of the processed image. 
-The external processor has the option of adding/removing/renaming tensors which will be passed to the model.
-
-## Selecting to the preprocessor
-
-If the preprocessor is defined correctly, its name should appear in the list of preprocessors in the NX Plugin settings. If it is selected in the plugin settings then the Edge AI Runtime will send data to the preprocessor and wait for its output.
-
-# Licence
-
-Copyright 2025, Network Optix, All rights reserved.
+Copyright 2026, Network Optix, All rights reserved.

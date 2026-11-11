@@ -9,7 +9,7 @@ mkdir -p build/preprocessors
 
 # Create container with proper options
 container_id=$(
-    sudo docker create \
+    docker create \
         --mount type=bind,src=$PWD,dst=/app \
         $image_id
 )
@@ -17,7 +17,7 @@ container_id=$(
 echo "Container ID: $container_id"
 
 # Start container and show output
-sudo docker start -a $container_id
+docker start -a $container_id
 
 #docker stop $(docker ps -a -q) && docker rm $(docker ps -a -q)
 docker stop $container_id

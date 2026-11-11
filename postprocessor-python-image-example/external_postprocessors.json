@@ -1,0 +1,18 @@
+[
+    {
+        "Name": "Image-Example",
+        "Command": "/path/to/build/postprocessor-python-image-example/postprocessor-python-image-example",
+        "Schedule": "OBJECTS",
+        "LogFilepath": "/tmp/postprocess.image-example.stdout.log",
+        "ReceiveInputImage": true,
+        "Objects": [
+            {
+                "ID": "python_image_example",
+                "Name": "Python Image Example"
+            }
+        ],
+        "Config": {
+            "LogLevel": "DEBUG"
+        }
+    }
+]

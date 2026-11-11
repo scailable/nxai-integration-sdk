@@ -1,154 +1,109 @@
-import os
+"""
+Confidences Postprocessor (v5 SDK)
+
+Adds a 'Confidence' attribute to every detected object, across all classes,
+formatted as bare `str(round(confidence, 2))` (no fixed decimal width, no
+unit suffix - e.g. "0.9", "1.0", not "0.90"). It takes no Config or Settings.
+"""
+
 import sys
-import socket
 import logging
-import configparser
+import nxai_postprocessor_sdk
 
-# Add the nxai-utilities python utilities
-script_location = os.path.dirname(sys.argv[0])
-sys.path.append(os.path.join(script_location, "../nxai-utilities/python-utilities"))
-import nxai_communication_utils
+# ============================================================================
+# Configuration
+# ============================================================================
 
+logger = logging.getLogger(__name__)
 
-CONFIG_FILE = os.path.join(script_location, "..", "etc", "plugin.confidence.ini")
+PROCESSOR_NAME = "confidences-example"
 
-# Set up logging
-if os.path.exists(os.path.join(script_location, "..", "etc")):
-    LOG_FILE = os.path.join(script_location, "..", "etc", "plugin.confidence.log")
-else:
-    LOG_FILE = os.path.join(script_location, "plugin.confidence.log")
-
-# Initialize plugin and logging, script makes use of INFO and DEBUG levels
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - example - %(message)s",
-    filename=LOG_FILE,
-    filemode="w",
-)
-
-# The name of the postprocessor.
-# This is used to match the definition of the postprocessor with routing.
-Postprocessor_Name = "Python-Example-Confidences-Postprocessor"
-
-# The socket this postprocessor will listen on.
-# This is always given as the first argument when the process is started
-# But it can be manually defined as well, as long as it is the same as the socket path in the runtime settings
-import tempfile
-Postprocessor_Socket_Path = os.path.join(tempfile.gettempdir(),"python-example-confidences-postprocessor.sock")
-
-# Data Types
-# 1:  //FLOAT
-# 2:  //UINT8
-# 3:  //INT8
-# 4:  //UINT16
-# 5:  //INT16
-# 6:  //INT32
-# 7:  //INT64
-# 8:  //STRING
-# 9:  //BOOL
-# 11: //DOUBLE
-# 12: //UINT32
-# 13: //UINT64
+# ============================================================================
+# Business Logic
+# ============================================================================
 
 
-def config():
-    logger.info("Reading configuration from:" + CONFIG_FILE)
+def handle_message(
+    msg: nxai_postprocessor_sdk.ObjectsPostProcessorMessage,
+) -> nxai_postprocessor_sdk.ObjectsPostProcessorMessage:
+    """Add a 'Confidence' attribute to every detected object.
 
-    try:
-        configuration = configparser.ConfigParser()
-        configuration.read(CONFIG_FILE)
+    Args:
+        msg: Parsed ObjectsPostProcessorMessage from NXAI runtime.
 
-        configured_log_level = configuration.get("common", "debug_level", fallback="INFO")
-        set_log_level(configured_log_level)
+    Returns:
+        The same message, with `attributes["Confidence"]` set on every object.
+    """
+    for class_name, objects in msg.objects.items():
+        for obj in objects:
+            obj.attributes["Confidence"] = str(round(obj.confidence, 2))
+        logger.debug(f"Added Confidence attribute to {len(objects)} '{class_name}' object(s)")
 
-        for section in configuration.sections():
-            logger.info("config section: " + section)
-            for key in configuration[section]:
-                logger.info("config key: " + key + " = " + configuration[section][key])
-
-    except Exception as e:
-        logger.error(e, exc_info=True)
-
-    logger.debug("Read configuration done")
+    return msg
 
 
-def set_log_level(level):
-    try:
-        logger.setLevel(level)
-    except Exception as e:
-        logger.error(e, exc_info=True)
+def run_message_loop(processor: nxai_postprocessor_sdk.ExternalPostprocessor) -> None:
+    """Serve messages until the engine sends a graceful EXIT signal.
 
+    `wait_for_message()` returns None both on a plain timeout and on an IPC EXIT
+    signal; only `processor.exit_requested` tells them apart. A loop that just
+    `continue`s on None regardless of that flag never returns, and the AI Manager
+    kills the process after its grace period instead of it exiting cleanly.
 
-def main():
-    # Start socket listener to receive messages from NXAI runtime
-    server = nxai_communication_utils.SocketListener(Postprocessor_Socket_Path)
-
-    # Wait for messages in a loop
+    Args:
+        processor: An initialized ExternalPostprocessor.
+    """
     while True:
-        # Wait for input message from runtime
         logger.debug("Waiting for input message")
-
         try:
-            connection, input_message = server.accept()
-            logger.debug("Received input message")
-        except nxai_communication_utils.SocketTimeout:
-            # Request timed out. Continue waiting
-            continue
-
-        # Parse input message
-        input_object = nxai_communication_utils.parseInferenceResults(input_message)
-        if isinstance(input_object, nxai_communication_utils.ExitSignal):
-            logger.info("Received exit signal.")
-            connection.close()
+            message_bytes = processor.wait_for_message(timeout_ms=5000)
+            if message_bytes is None:
+                if processor.exit_requested:
+                    logger.info("Received graceful exit signal, shutting down")
+                    return
+                logger.debug("Timeout waiting for message")
+                continue
+            logger.debug(f"Received message ({len(message_bytes)} bytes)")
+            objects_message = processor.parse_objects_message(message_bytes)
+            if objects_message is None:
+                logger.error("Failed to parse message")
+                continue
+            processed_msg = handle_message(objects_message)
+            response_bytes = processor.write_objects_message(processed_msg)
+            if response_bytes is None:
+                logger.error("Failed to serialize message")
+                continue
+            if not processor.send_response(response_bytes):
+                logger.error("Failed to send response")
+                break
+            logger.debug("Response sent successfully")
+        except Exception as e:
+            logger.error(f"Error processing message: {e}", exc_info=True)
             break
 
-        # Use pformat to format the deep object
-        # formatted_unpacked_object = pformat(input_object)
-        # logger.debug(f'Unpacked:\n\n{formatted_unpacked_object}\n\n')
 
-        # Add the confidence of each object as attributes
-        for _, class_data in input_object["ObjectsMetaData"].items():
-            for object_index in range(len(class_data["Confidences"])):
-                confidence_string = str(round(class_data["Confidences"][object_index], 2))
-                class_data["AttributeKeys"][object_index].append("Confidence")
-                class_data["AttributeValues"][object_index].append(confidence_string)
-
-        logger.info("Added test bounding box to output")
-
-        # Write object back to string
-        output_message = nxai_communication_utils.writeInferenceResults(input_object)
-
-        # Send message back to runtime
-        connection.send(output_message)
-        connection.close()
-
+# ============================================================================
+# Main Entry Point
+# ============================================================================
 
 if __name__ == "__main__":
-    ## initialize the logger
-    logger = logging.getLogger(__name__)
+    logger = nxai_postprocessor_sdk.setup_logging()
+    processor_config = nxai_postprocessor_sdk.load_config(sys.argv)
+    nxai_postprocessor_sdk.apply_config_logging(processor_config, logger)
+    logger.info(f"Initializing '{processor_config.get('ProcessorName', PROCESSOR_NAME)}' postprocessor")
+    logger.debug(f"Command-line arguments: {sys.argv}")
 
-    logger.info("Location: " + str(script_location))
-
-    ## read configuration file if it's available
-    config()
-
-    logger.info("Initializing example plugin")
-    logger.debug("Input parameters: " + str(sys.argv))
-
-    # Parse input arguments
-    if len(sys.argv) > 1:
-        Postprocessor_Socket_Path = sys.argv[1]
-
-    # Start program
+    processor = nxai_postprocessor_sdk.ExternalPostprocessor()
+    if not processor.initialize_from_args():
+        logger.error("Failed to initialize postprocessor from arguments")
+        sys.exit(1)
+    logger.info(f"Postprocessor '{processor.name}' initialized successfully")
+    logger.info("Waiting for messages from NXAI runtime...")
     try:
-        main()
-    except Exception as e:
-        logger.error(e, exc_info=True)
+        run_message_loop(processor)
     except KeyboardInterrupt:
         logger.info("Exited with keyboard interrupt")
-
-    try:
-        os.unlink(Postprocessor_Socket_Path)
-    except OSError:
-        if os.path.exists(Postprocessor_Socket_Path):
-            logger.error("Could not remove socket file: " + Postprocessor_Socket_Path)
+    except Exception as e:
+        logger.error(f"Fatal error: {e}", exc_info=True)
+    finally:
+        logger.info("Postprocessor shutdown")

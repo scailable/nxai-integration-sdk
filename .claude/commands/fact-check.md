@@ -13,9 +13,7 @@ Verify that CLAUDE.md accurately describes the current state of the repository. 
    - Every `postprocessor-*/` and `preprocessor-*/` directory name mentioned in the "Picking an example to copy" section
    - Top-level items: `nxai-utilities/`, `message_processing_utils/`, `example_models/`, `CMakeLists.txt`, `build_all.sh`, `build_docker.sh`
 
-5. **CMakeLists.txt consistency**:
-   - For each `add_subdirectory(...)` in root `CMakeLists.txt`, verify the referenced directory exists.
-   - For each `postprocessor-*/` and `preprocessor-*/` directory that exists, verify there is a corresponding `add_subdirectory` entry. Flag any directory that is missing from CMakeLists.txt.
+5. **Root-CMake reachability** is not this skill's job — run the build wiring scan instead: `python tests/build-wiring/build_wiring_scan.py --root .` — the same check as CTest case `build-wiring-scan`.
 
 6. **"Picking an example" mappings** — for every directory name listed in the "Picking an example to copy" section of CLAUDE.md, confirm the directory exists.
 
@@ -26,7 +24,6 @@ Verify that CLAUDE.md accurately describes the current state of the repository. 
    ✅ Post-processor count: 14 (matches)
    ✅ Preprocessor count: 3 (matches)
    ❌ docs/ at repo root: does not exist — actual location is .claude/docs/
-   ⚠️ postprocessor-python-edgeimpulse-example: directory exists but missing from CMakeLists.txt
    ✅ postprocessor-python-example: exists
    ...
    ```

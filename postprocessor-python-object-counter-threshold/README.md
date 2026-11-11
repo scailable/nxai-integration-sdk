@@ -1,88 +1,104 @@
-Postprocessor Python Object Counter Threshold
-=============================================
+# Postprocessor Python Object Counter Threshold
 
-Counts detected objects per category each frame and fires an event only when the total count meets or exceeds a configurable threshold.
+A v5 post-processor that counts detected objects per class each frame and fires
+the `object.counter.threshold` event when the total count meets or
+exceeds a configurable threshold. It is a noise-reduction tool: alerts are only generated
+when a meaningful number of objects is present, not on every frame.
 
-This is useful for reducing event noise — alerts are only generated when a meaningful number of objects is present, rather than on every frame.
+## What it does
 
-# Requirements
+`handle_message` calls `count_objects` (which counts via `len(msg.objects[cls])`)
+and sums the results. If the total is `>= min_object_count`, it appends an
+`EventMetadata` to `msg.events`:
 
-Any model that outputs bounding boxes.
-
-# Configuration
-
-Copy the [INI example](plugin.object-counter-threshold.ini.example) to:
-```
-/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/etc/plugin.object-counter-threshold.ini
-```
-
-The threshold is configurable via the NX AI Manager UI:
-
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `min_object_count` | 5 | Minimum total detected objects required to fire an event |
-
-# How to build
-
-```shell
-mkdir -p build && cd build
-python3 -m venv integrationsdk && source integrationsdk/bin/activate
-cmake ..
-cmake --build . --target postprocessor-python-object-counter-threshold
+```python
+event.type_id = "object.counter.threshold"
+event.description = "Detected 2 car, 3 person. Total: 5 objects."
 ```
 
-# How to install
+The emitted id is exactly the `object.counter.threshold` id declared in the
+registration JSON — see "Registration" below.
 
-```shell
-cmake --install . --component postprocessor-python-object-counter-threshold
-```
+When `msg.objects` is empty the processor no-ops — no event is appended.
 
-# Registration
+## Behavior change from v4
 
-Add to `external_postprocessors.json`:
+- **Threshold is a live `UserSettings` control** (`min_object_count`), read
+  fresh from `msg.user_settings` on every frame — the NX plugin UI controls
+  the threshold at runtime, same as v4. It is not a launch-time `Config` arg.
+- **`Caption` field dropped**: v4 emitted `{"Caption": "...", "Description": "..."}`
+  on the event. The v5 `EventMetadata` carries only `type_id` and `description`;
+  there is no `Caption` in the v5 wire codec.
+
+## Registration
+
+Add the processor to `external_postprocessors.json` (see the colocated
+`external_postprocessors.json` and `.claude/docs/external_postprocessors_json.md`):
 
 ```json
 {
-    "externalPostprocessors": [
+    "Name": "Object-Counter-Threshold",
+    "Command": "/path/to/postprocessor-python-object-counter-threshold",
+    "Schedule": "OBJECTS",
+    "LogFilepath": "/tmp/postprocess.object-counter-threshold.stdout.log",
+    "Config": {
+        "LogLevel": "DEBUG"
+    },
+    "UserSettings": [
         {
-            "Name": "External - Object Counter with Threshold",
-            "Command": "/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors/postprocessor-python-object-counter-threshold",
-            "SocketPath": "/tmp/python-object-counter-threshold-postprocessor.sock",
-            "ReceiveInputTensor": false,
-            "Events": [
-                {
-                    "ID": "object.counter.threshold",
-                    "Name": "External - Object Count Threshold"
-                }
-            ],
-            "Settings": [
-                {
-                    "type": "SpinBox",
-                    "name": "externalprocessor.min_object_count",
-                    "caption": "Minimum Object Count",
-                    "description": "Trigger event only when total object count meets or exceeds this threshold",
-                    "defaultValue": 5,
-                    "minValue": 1,
-                    "maxValue": 100
-                }
-            ]
+            "type": "SpinBox",
+            "name": "min_object_count",
+            "caption": "Minimum Object Count",
+            "description": "Fire the threshold event when the total detected object count meets or exceeds this value",
+            "defaultValue": 5
+        }
+    ],
+    "Events": [
+        {
+            "ID": "object.counter.threshold",
+            "Name": "Object count threshold exceeded"
         }
     ]
 }
 ```
 
-Then restart the NX Server:
+Key points:
+
+- `Schedule: "OBJECTS"` — the processor runs on inference-results messages.
+- `Config` delivers only launch-time `LogLevel`; the threshold is a live
+  `UserSettings` value, not launch-time config.
+- `UserSettings` declares `min_object_count` as a `SpinBox` with a default of
+  `5`; the processor falls back to that same default when the engine forwards
+  no settings (e.g. an unpatched engine).
+- `Events` declares the single event ID the processor may emit; undeclared IDs
+  are silently dropped by the AI Manager.
+- The JSON id and the emitted id are the same bare `object.counter.threshold`.
+  The AI Manager copies `Events[].ID` into the DeviceAgent manifest verbatim
+  and relays emitted event ids verbatim too, and the mediaserver drops events
+  whose id is not in the manifest — so both sides must be the bare id
+  Event ids differ from object classes here: those the engine
+  still prefixes with `nx.nxai.`.
+- No `Objects`: the processor counts existing detections and declares no new
+  class.
+
+## Build, test, install
+
+Build via the CMake tree:
 
 ```shell
-sudo service networkoptix-metavms-mediaserver restart
+mkdir -p build && cd build
+cmake ..
+cmake --build . --target postprocessor-python-object-counter-threshold
+cmake --install . --component postprocessor-python-object-counter-threshold
 ```
 
-# Logs
+Run the colocated unit tests:
 
 ```shell
-tail -f /opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/etc/plugin.object-counter-threshold.log
+cd postprocessor-python-object-counter-threshold
+PYTHONPATH=../nxai-utilities python -m unittest test_postprocessor_python_object_counter_threshold -v
 ```
 
-# Licence
+## Licence
 
-Copyright 2025, Network Optix, All rights reserved.
+Copyright 2026, Network Optix, All rights reserved.

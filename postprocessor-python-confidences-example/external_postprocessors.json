@@ -1,0 +1,11 @@
+[
+    {
+        "Name": "Confidences-Example",
+        "Command": "/path/to/build/postprocessor-python-confidences-example/postprocessor-python-confidences-example",
+        "Schedule": "OBJECTS",
+        "LogFilepath": "/tmp/postprocess.confidences-example.stdout.log",
+        "Config": {
+            "LogLevel": "DEBUG"
+        }
+    }
+]

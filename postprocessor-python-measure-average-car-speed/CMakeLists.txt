@@ -86,18 +86,22 @@ if(WIN32)
     endif()
 endif()
 
+# The script imports both nxai_postprocessor_sdk (nxai-utilities/) and
+# message_processing_utils (repo root), so Nuitka needs both on PYTHONPATH to
+# statically resolve them at compile time.
+if(WIN32)
+    # ';' is CMake's own list separator, so it must be escaped here or
+    # ${PROCESSOR_PYTHONPATH} expands to two separate COMMAND arguments
+    # instead of one PYTHONPATH string, corrupting the generated build step.
+    set(PROCESSOR_PYTHONPATH "${CMAKE_SOURCE_DIR}\\;${CMAKE_SOURCE_DIR}/nxai-utilities")
+else()
+    set(PROCESSOR_PYTHONPATH "${CMAKE_SOURCE_DIR}:${CMAKE_SOURCE_DIR}/nxai-utilities")
+endif()
+
 add_custom_target(${PROCESSOR_NAME} ALL
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-    DEPENDS nxai-c-utilities-shared
-    COMMAND ${PIP_EXECUTABLE} install -r ../nxai-utilities/python-utilities/requirements.txt
     COMMAND ${PIP_EXECUTABLE} install -r requirements.txt
-    # Copy files to source directory for easy compiling
-    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:nxai-c-utilities-shared> ${CMAKE_CURRENT_SOURCE_DIR}
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/../nxai-utilities/python-utilities/nxai_communication_utils.py ${CMAKE_CURRENT_SOURCE_DIR}
-    COMMAND ${CMAKE_COMMAND} -E env PYTHONPATH=${CMAKE_SOURCE_DIR} ${PYTHON_VENV_EXECUTABLE} -m nuitka ${CMAKE_CURRENT_SOURCE_DIR}/${PROCESSOR_NAME}.py --onefile --output-filename=${PROCESSOR_NAME} --output-dir=${CMAKE_CURRENT_BINARY_DIR} --onefile-tempdir-spec={TEMP}/onefile_${PROCESSOR_NAME}
-    # Clean up copied files
-    COMMAND ${CMAKE_COMMAND} -E remove ${CMAKE_CURRENT_SOURCE_DIR}/nxai_communication_utils.py
-    COMMAND ${CMAKE_COMMAND} -E remove $<TARGET_FILE_NAME:nxai-c-utilities-shared>
+    COMMAND ${CMAKE_COMMAND} -E env PYTHONPATH=${PROCESSOR_PYTHONPATH} ${PYTHON_VENV_EXECUTABLE} -m nuitka ${CMAKE_CURRENT_SOURCE_DIR}/${PROCESSOR_NAME}.py --onefile --output-filename=${PROCESSOR_NAME} --output-dir=${CMAKE_CURRENT_BINARY_DIR} --onefile-tempdir-spec={TEMP}/onefile_${PROCESSOR_NAME}
 )
 
 if(WIN32)
@@ -111,8 +115,3 @@ install(
     COMPONENT ${PROCESSOR_NAME}
 )
 
-install(
-    TARGETS nxai-c-utilities-shared
-    DESTINATION ${INSTALL_DEST_POSTPROCESSORS}
-    COMPONENT ${PROCESSOR_NAME}
-)

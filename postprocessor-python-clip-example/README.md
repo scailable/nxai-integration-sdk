@@ -1,315 +1,152 @@
-Postprocessor Python Clip Example
-============================
+# CLIP Postprocessor
 
-This example application provides an example on how to create a Python based postprocessor that can be integrated with the NXAI AI Manager.
+## What it does
 
-This postprocessor looks for text prompts defined in the settings of the CLIP preprocessor, and will generate an event with the prompt information.
+This postprocessor is meant to be paired with `preprocessor-python-clip-example`
+and a chained CLIP model. CLIP scores an image against up to five text prompts;
+this postprocessor picks the winning prompt and surfaces it as an attribute and
+an event.
 
-# Postprocessors Control Flow
+On the `OBJECTS` schedule, with `ReceiveBinaryData: true`, this postprocessor
+reads the raw `scores` tensor from `msg.tensors`. The SDK parses the `Tensors`
+array of the message into this map. The processor computes an `argmax` over the
+non-empty prompt slots configured in `UserSettings`, then:
 
-The normal control flow of a postprocessor is to receive a MessagePack binary message representing the inference results from the NXAI AI Manager, and return the same or an altered version of the received MessagePack message.
+- caches the winning prompt text, keyed by `OriginalObjectID` (module-level
+  `OrderedDict`, FIFO-evicted past 100 entries, no TTL — this is a literal port
+  of v4's `objects_attributes`), because the CLIP-scoring message carries
+  `OriginalObjectID` but an empty `Objects` map (CLIP is not a detector);
+- appends a `clip.event` if the winning prompt differs from the last one for this device, or if
+  `event_cooldown_sec` has elapsed since the last identical one.
 
-An external postprocessor can parse the incoming MessagePack message, do analysis, optionally alter it, and return it. The alterations made by an external postprocessor will be kept and sent to the Network Optix server to be represented as bounding boxes or events.
+On a later `OBJECTS` message from the detector node — the same registration
+entry runs on every node in the chain — any object
+whose track id matches a cached `OriginalObjectID` gets
+`obj.attributes["clip_prompt"] = <cached winning prompt text>`.
 
-An external postprocessor is a standalone application which is expected to receive these MessagePack messages and return a MessagePack message with a compatible format. Instructions can be added to a configuration file to handle executing and terminating the application.
+### The `scores` tensor guard
 
-Only one external processor is started for all devices. This means that a single processor can combine data for multiple devices for deeper analysis.
+- **Absent** `Tensors`, or no entry named `scores` — the **normal** case for a
+  non-CLIP frame (e.g. the detector node itself never carries a `scores`
+  tensor): `debug`-logged, no-op.
+- **Present but the wrong shape/dtype** — an operator/model-contract mismatch:
+  `error`-logged with the expected vs. actual shape and dtype, no-op.
+- **Present and matching the contract** (`[1, 5]` float32) — scored normally.
 
-# MessagePack schema
+### Empty prompt slots
 
-The incoming MessagePack message follows a specific schema. If the message is altered, the returned message must follow the same schema. In Json, this schema would look like:
+A `promptN` slot left blank in the settings dialog can never win the `argmax`,
+even if the model happens to score that slot's fixed padding highest — matching
+v4 exactly (v4's engine-computed `Scores` map never contained an entry for a
+slot outside the operator's typed prompts in the first place).
+
+## The model this example expects
+
+| Tensor | Shape | Type | Notes |
+|---|---|---|---|
+| input `image-` | `[1, 3, 224, 224]` | float32 | RGB in `[0, 1]` |
+| input `text` | `[5, 77]` | int32 | written by `preprocessor-python-clip-example` |
+| output `scores` | `[1, 5]` | **float32** | one score per prompt slot, higher is better — what this postprocessor reads |
+
+See `preprocessor-python-clip-example/README.md` for the `image`/`text` side of
+the contract and `tools/export_clip_prompt_scorer.py` for a reference model
+satisfying this table (LAION CLIP ViT-B/32, exported with `logits_per_image` as
+`scores`).
+
+**Prompt order matters.** This postprocessor's `prompt1`..`prompt5` `UserSettings`
+must contain the **same prompt texts, in the same order**, as the paired
+preprocessor's `prompt1`..`prompt5`. v5 matches `scores[i]` back to a prompt
+purely by index — there is no name carried on the wire like v4's `Scores` map
+keys. A prompt typed into one dialog but not the other (or in a different slot)
+is scored silently against the wrong text; nothing detects the divergence.
+
+## Behavior change from v4
+
+- **Scoring moves processor-side.** v4's engine computed the `argmax` over an
+  engine-delivered `Scores: {name: score}` map. v5 has no `Scores` key; the
+  `argmax` is computed here, over the raw `scores` tensor.
+- **`event_cooldown_sec`** is a `UserSettings` `DoubleSpinBox` (replacing v4's
+  `externalprocessor.eventCooldown`), and the five prompts are a `UserSettings`
+  `Repeater` (replacing v4's `externalprocessor.prompt*` keys) — matching the
+  paired preprocessor's dialog style.
+- **Attribute key.** v4 wrote the winning prompt text as *both* the attribute
+  key and its value (`AttributeKeys[i].append(prompt)` /
+  `AttributeValues[i].append(prompt)`). v5's `attributes` is a `dict[str, str]`
+  rendered verbatim in the object details panel, so a literal port would make
+  the attribute *name* change every time an operator edits a prompt. This
+  postprocessor instead writes a stable key, `obj.attributes["clip_prompt"]`,
+  with the winning prompt text as the value — a deliberate, narrow departure
+  from v4, whose behavior is not expressible in the v5 attribute type
+  without an observably worse UI result.
+- The emitted event drops v4's `Caption` field (v5 `EventMetadata` carries only
+  `type_id` + `description`) and carries the `clip.event` id registered in
+  `external_postprocessors.json` verbatim.
+
+## Registration
 
 ```json
-{
-    "DeviceID": "<Device ID>",
-    "DeviceName": "<Device Name>",
-    "Timestamp": <Timestamp>,
-    "InputIndex": <Index>,
-    "Width": <Width>,
-    "Height": <Height>,
-    "BBoxes_xyxy": {
-        "<Class Name>": [<Float Coordinates>]
+[
+    {
+        "Name": "CLIP-Post-Example",
+        "Command": "/path/to/build/postprocessor-python-clip-example/postprocessor-python-clip-example",
+        "Schedule": "OBJECTS",
+        "ReceiveBinaryData": true,
+        "LogFilepath": "/tmp/postprocess.clip-example.stdout.log",
+        "Config": {
+            "LogLevel": "DEBUG"
         },
-    "ObjectsMetaData": {
-        <"Class Name">: {
-            "ObjectIDs": [
-                <16-byte UUID>,
-                <16-byte UUID>
-            ],
-            "AttributeKeys": [
-                [<Attribute Key>,<Attribute Key>],
-                [<Attribute Key>,<Attribute Key>]
-            ],
-            "AttributeValues": [
-                [<Attribute Value>,<Attribute Value>],
-                [<Attribute Value>,<Attribute Value>]
-            ]
-        }
-    },
-    "Scores": {
-        <"Class Name"> : <Score>
-    },
-    "ExternalProcessorSettings": {}
-}
- ```
-
-Some fields depend on which model is assigned. If a model outputs bounding boxes, the `BBoxes_xyxy` field will be present. If a model outputs scores, the `Scores` field will be present.
-
-The image header message contains fields indicating information about the image dimensions and information to access this data:
-
-```json
-{
-    "Width": <Width>,
-    "Height": <Height>,
-    "Channels": <Channels>,
-    "SHMKEY": <SHM Key>
-}
+        "UserSettings": [
+            {
+                "type": "DoubleSpinBox",
+                "name": "event_cooldown_sec",
+                "caption": "Event Cooldown (seconds)",
+                "description": "Minimum time between repeated CLIP prompt-recognized events for the same winning prompt on a device",
+                "defaultValue": 0
+            },
+            {
+                "type": "Repeater",
+                "count": 5,
+                "startIndex": 1,
+                "template": {
+                    "type": "TextField",
+                    "name": "prompt#",
+                    "caption": "Prompt #",
+                    "description": "Text prompt # to score the frame against. Must match preprocessor-python-clip-example's prompt # in the same order.",
+                    "defaultValue": ""
+                }
+            }
+        ],
+        "Events": [
+            {
+                "ID": "clip.event",
+                "Name": "CLIP prompt recognized"
+            }
+        ]
+    }
+]
 ```
 
-A convenience example function is provided showing how to use this data to access the original tensor data in shared memory.
+- `Schedule: "OBJECTS"` + `ReceiveBinaryData: true` — this postprocessor runs on
+  every node of the pipeline (detector and chained CLIP node alike) and needs
+  the raw `Tensors` array on each message.
+- `UserSettings` — a `DoubleSpinBox` (`event_cooldown_sec`) and a `Repeater` of
+  five `TextField` controls, `prompt1` through `prompt5`.
+- `Events` — the id `clip.event`, which the code emits verbatim.
 
-# Requirements
-
-For this example to work, you can use any model.
-
-# How to use
-
-## Download the integration SDK
-
-You probably have the integration SDK already if you're looking at this readme, the command to get the full integration SDK is as follows:
-
-```shell
-git clone https://github.com/scailable/sclbl-integration-sdk.git --recurse-submodules
-```
-
-If you have downloaded the sdk previously, you can also update to the latest version of the integration SDK while in the directory of the downloaded git repository.
-
-```shell
-git pull --recurse-submodules
-```
-
-## Configuration of example postprocessor
-
-Create a [configuration file](plugin.example.ini.example) at `/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/etc/plugin.example.ini` and add some overrides for the configuration.
-
-This plugin only supports changing the debug level between DEBUG, INFO, WARNING, ERROR and CRITICAL
-
-For example:
-
-```ini
-[common]
-debug_level=DEBUG
-```
-
-## Preparation of dependencies
-
-Install the needed dependencies
-
-```shell
-sudo apt install cmake
-sudo apt install g++
-sudo apt install python3-pip
-sudo apt install patchelf
-```
-
-Change into the directory created for the project if you're not already there.
-
-```shell
-cd nxai-integration-sdk/
-```
-
-Prepare the *build* directory in the project directory, and switch to the build directory.
-
-```shell
-mkdir -p build
-cd build
-```
-
-Set up a python virtual environment in the newly created build directory (on recent ubuntu servers this is required).
-
-```shell
-python3 -m venv integrationsdk
-source integrationsdk/bin/activate
-```
-
-## (optionally) Remove other postprocessors for compilation
-
-Edit the `CMakelist.txt` to disable all but the external postprocessor.
-
-```shell
-nano ../CMakeLists.txt
-```
-
-It should look similar to this
-
-```shell
-cmake_minimum_required(VERSION 3.10.2)
-
-project(sclbl-integration-examples)
-
-# Add Scailable C Utilities for all subprojects
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/sclbl-utilities)
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/sclbl-utilities/include)
-
-# Add Clip Postprocessor Python project
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/postprocessor-python-clip-example)
-
-# Add installation option
-install(TARGETS
-    DESTINATION /opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors/
-)
-install(PROGRAMS
-    ${CMAKE_CURRENT_BINARY_DIR}/postprocessor-python-clip-example/postprocessor-python-clip-example
-    DESTINATION /opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors/
-)
-```
-
-## Compile the postprocessor
-
-Build the postprocessor, while in the created *build* directory. This may take a while, depending on the speed of your system.
+## Build, test, install
 
 ```shell
 cmake ..
-make
+cmake --build . --target postprocessor-python-clip-example
+cmake --install . --component postprocessor-python-clip-example
 ```
 
-## Install the postprocessor
-
-Once compiled, copy the executable to an accessible directory.
-
-A convenience directory within the AI Manager installation is created for this purpose at `/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors`.
-
-The application and settings files you add must be readable and executable by the NX AI AI Manager. This can be achieved by running:
-
-```
-sudo chmod -R 777 /opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors
-```
-
-Install the postprocessor automatically with the cmake command, also from within the *build* directory.
+Run the tests from the `postprocessor-python-clip-example/` directory:
 
 ```shell
-cmake --build . --target install
+PYTHONPATH=../nxai-utilities python -m unittest test_postprocessor_python_clip_example -v
 ```
 
-## Defining the postprocessor
+## Licence
 
-Create a configuration file at
-```
-/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors/external_postprocessors.json
-```
-for Linux, or
-```
-C:\Windows\System32\config\systemprofile\AppData\Local\Network Optix\Network Optix MetaVMS Media Server\nx_ai_manager\nxai_manager\postprocessors\external_postprocessors.json
-```
-for Windows, and add the details of your postprocessor to the root object of that file. For example: 
-
-``` json
-{
-    "externalPostprocessors": [
-        {
-            "Name":"Example-Postprocessor-Clip",
-            "Command":"/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors/postprocessor-python-clip-example",
-            "SocketPath":"/tmp/example-clip-postprocessor.sock",
-            "ReceiveInputTensor": false,
-            "ReceiveConfidenceData": false,
-            "Events": [
-                {
-                    "ID":"nx.clip.event",
-                    "Name":"CLIP Prompt Recognized"
-                }
-            ],
-            "Settings": [
-                {
-                    "type": "SpinBox",
-                    "name": "externalprocessor.eventCooldown",
-                    "caption": "Generate event every (s):",
-                    "description": "The postprocessor won't generate an event more frequently than this, unless the state changes.",
-                    "defaultValue": 5,
-                    "minValue": 0,
-                    "maxValue": 9999999999
-                }
-            ]
-        }
-    ]
-}
-```
-For Linux, and
-```json
-{
-    "externalPostprocessors": [
-        {
-            "Name":"Example-Postprocessor-Clip",
-            "Command":"C:\\Windows\\System32\\config\\systemprofile\\AppData\\Local\\Network Optix\\Network Optix MetaVMS Media Server\\nx_ai_manager\\nxai_manager\\postprocessors\\postprocessor-python-clip-example.exe",
-            "SocketPath":"C:\\Windows\\Temp\\example-clip-postprocessor.sock",
-            "ReceiveInputTensor": false,
-            "ReceiveConfidenceData": false,
-            "Events": [
-                {
-                    "ID":"nx.clip.event",
-                    "Name":"CLIP Prompt Recognized"
-                }
-            ],
-            "Settings": [
-                {
-                    "type": "SpinBox",
-                    "name": "externalprocessor.eventCooldown",
-                    "caption": "Generate event every (s):",
-                    "description": "The postprocessor won't generate an event more frequently than this, unless the state changes.",
-                    "defaultValue": 5,
-                    "minValue": 0,
-                    "maxValue": 9999999999
-                }
-            ]
-        }
-    ]
-}
-```
-For Windows.
-
-This tells the AI Manager about the postprocessor:
-- **Name** gives the postprocesor a name so it can be selected later
-- **Command** defines how to start the postprocessor
-- **SocketPath** tells the AI Manager where to send data to so the external postprocessor will receive it
-- **ReceiveInputTensor** tells the AI Manager if this postprocessor expects information to access the raw input tensor data
-- **Settings** defines the settings which will appear in the plugin UI.
-
-The socket path is always given as the first command line argument when the application is started. It is therefore best practice for the external postprocessor application to read its socket path from here, instead of defining the data twice.
-
-## Defining the settings
-
-The settings should be defined as in the schema from the NetworkOptix Metadata SDK, as documented in `settings_model.md` ( included in this directory as an example ).
-
-The settings will always be sent to the external postrprocessor as a string representation, this includes integers and floats. It will be up to the external postprocessor to correctly convert these values to usable types.
-
-The `"name"` value in the settings should always start with `externalprocessor.`, otherwise they will be ignored. 
-For performance reasons, settings aren't sorted per external postprocessor. This means that if you have multiple external postprocessors each with their own settings, then each postprocessor will receive all settings for all postprocessors.
-
-## Restarting the server
-
-Finally, to (re)load your new postprocessor, make sure to restart the NX Server with:
-
-```shell
-sudo service networkoptix-metavms-mediaserver restart
-```
-
-You also want to make sure the postprocessor can be used by the NX AI Manager (this is the mostly same command as earlier)
-
-```shell
-sudo chmod -R a+x /opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors/
-```
-
-## Selecting to the postprocessor
-
-If the postprocessor is defined correctly, its name should appear in the list of postprocessors in the NX Plugin settings. If it is selected in the plugin settings then the Edge AI Runtime will send data to the postprocessor and wait for its output.
-
-## Output logging
-
-There is an output log where the uploads can be tracked in real time from the server.
-
-```shell
-tail -f /opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/etc/plugin.clip.post.log
-```
-
-# Licence
-
-Copyright 2025, Network Optix, All rights reserved.
+Copyright 2026, Network Optix, All rights reserved.

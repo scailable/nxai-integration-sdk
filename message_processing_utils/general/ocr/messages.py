@@ -3,7 +3,6 @@ Base OCR message class.
 """
 
 import logging
-import numpy as np
 from abc import ABC, abstractmethod
 from message_processing_utils.base.messages import InferenceMessage
 
@@ -14,13 +13,16 @@ logger = logging.getLogger(__name__)
 class OcrMessage(InferenceMessage, ABC):
     """Message from OCR model (with BinaryOutputs)."""
 
-    def __init__(self, message: dict):
-        super().__init__(message)
+    def __init__(self, sdk_message, raw_tensors=None):
+        super().__init__(sdk_message, raw_tensors)
+
+    @abstractmethod
+    def extract_logits_array(self, output_name):
+        """Return the named tensor as a logits array, or None if unusable."""
 
     @abstractmethod
     def decode_ocr_logits(self, engine, output_name):
         """Decode OCR logits and return recognized text."""
-        pass
 
     def handle(self, ocr_cache) -> None:
         if ocr_cache.ocr_pool:
@@ -40,7 +42,3 @@ class OcrMessage(InferenceMessage, ABC):
                 text, conf = result
                 ocr_cache.cache_ocr_result(self, text, conf)
         return None
-
-    def extract_logits_array(self, output_name):
-        """Extract logits array from message."""
-        pass

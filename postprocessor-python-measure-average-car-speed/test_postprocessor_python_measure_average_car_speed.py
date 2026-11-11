@@ -1,720 +1,533 @@
 """
-Unit tests for postprocessor-python-measure-average-car-speed.
+Unit tests for postprocessor-python-measure-average-car-speed (v5 SDK).
 """
 
 import unittest
-import logging
-from unittest.mock import MagicMock, patch, mock_open
+from unittest.mock import patch
+import json
+import re
 import sys
 import os
-import numpy as np
-from datetime import datetime
+import importlib.util
+import msgpack
+from datetime import datetime, timedelta
 
-# Add the nxai-utilities path before importing the module
 script_dir = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(script_dir, "../nxai-utilities/python-utilities"))
-# Add repo root so message_processing_utils is importable
 repo_root = os.path.join(script_dir, "..")
 if repo_root not in sys.path:
     sys.path.insert(0, repo_root)
+_nxai_utilities = os.path.join(repo_root, "nxai-utilities")
+if _nxai_utilities not in sys.path:
+    sys.path.insert(0, _nxai_utilities)
+if script_dir not in sys.path:
+    sys.path.insert(0, script_dir)
 
-# Add current directory to path for speed_cache import
-current_dir = os.path.dirname(os.path.abspath(__file__))
-if current_dir not in sys.path:
-    sys.path.insert(0, current_dir)
+from nxai_postprocessor_sdk import ObjectMetadata, ObjectsPostProcessorMessage
+from message_processing_utils.anpr import CctOcrMessage, SpeedDetectorMessage
+from message_processing_utils.general.ocr import LogitsOcrEngine, OcrCache
+from speed_cache import SpeedMeasurementCache
 
-# Define mock exception classes that inherit from Exception
-class MockSocketTimeout(Exception):
-    pass
+spec = importlib.util.spec_from_file_location(
+    "postprocessor_python_measure_average_car_speed",
+    os.path.join(script_dir, "postprocessor-python-measure-average-car-speed.py"),
+)
+module = importlib.util.module_from_spec(spec)
+sys.modules["postprocessor_python_measure_average_car_speed"] = module
+spec.loader.exec_module(module)
 
-class MockSocketError(Exception):
-    pass
+CAMERA_1_ID = "3645c7ee-ca91-e579-e753-1d85af1fd08c"
+CAMERA_2_ID = "e3e9a385-7fe0-3ba5-5482-a86cde7faf48"
 
-class MockExitSignal:
-    pass
+# The plugin correlates a response to its request on DeviceID + "|" + Timestamp,
+# so the fixture must carry a non-zero Timestamp -- the SDK default is 0, which
+# would let the echo assertion pass vacuously. CAMERA_1_ID already stands in for
+# a non-empty DeviceID.
+ECHOED_TIMESTAMP = 1726000000000000
 
-# Mock dependencies before importing the main module
-mock_comm = MagicMock()
-mock_comm.SocketTimeout = MockSocketTimeout
-mock_comm.SocketError = MockSocketError
-mock_comm.ExitSignal = MockExitSignal
-sys.modules['nxai_communication_utils'] = mock_comm
-sys.modules['msgpack'] = MagicMock()
 
-import logging as _logging
+def _object(track_id, license_plate=None):
+    obj = ObjectMetadata()
+    obj.track_id = track_id
+    if license_plate is not None:
+        obj.attributes["License Plate Text"] = license_plate
+    return obj
 
-# Patch the FileHandler to avoid creating log files during tests
-with patch('logging.FileHandler') as _file_handler:
-    _file_handler.return_value = _logging.NullHandler()
-    import importlib.util
-    spec = importlib.util.spec_from_file_location(
-        "postprocessor_python_measure_average_car_speed",
-        os.path.join(script_dir, "postprocessor-python-measure-average-car-speed.py")
-    )
-    module = importlib.util.module_from_spec(spec)
-    sys.modules["postprocessor_python_measure_average_car_speed"] = module
-    # Ensure nxai_communication_utils is available in the module's namespace
-    module.nxai_communication_utils = mock_comm
-    spec.loader.exec_module(module)
-    
-    # Import classes from message_processing_utils
-    from message_processing_utils import InferenceMessage, GenericMessage
-    from message_processing_utils.general.detector import DetectorMessage
-    from message_processing_utils.anpr import SpeedDetectorMessage, CctOcrMessage
-    from message_processing_utils.general.ocr import (
-        OcrCache,
-        LogitsOcrEngine,
-        OcrWorkerPool,
-        load_ocr_config,
-    )
-    from speed_cache import SpeedMeasurementCache
+
+def _detector_message(objects, device_id=CAMERA_1_ID, timestamp=None, user_settings=None):
+    sdk_msg = ObjectsPostProcessorMessage()
+    sdk_msg.objects = {"lp": list(objects)}
+    sdk_msg.device_id = device_id
+    sdk_msg.timestamp = timestamp
+    sdk_msg.user_settings = user_settings or {}
+    return SpeedDetectorMessage(sdk_msg)
+
+
+def _microseconds(moment):
+    return int(moment.timestamp() * 1_000_000)
+
+
+def _camera_config(**overrides):
+    config = {
+        "camera_1_id": CAMERA_1_ID,
+        "camera_2_id": CAMERA_2_ID,
+        "distance_between_cameras_m": 100.0,
+        "second_appearance_timeout_sec": 60.0,
+    }
+    config.update(overrides)
+    return config
+
+
+class TestReadCameraConfig(unittest.TestCase):
+    def test_defaults_when_nothing_configured(self):
+        config = module.read_camera_config({})
+        self.assertEqual(config["camera_1_id"], "")
+        self.assertEqual(config["camera_2_id"], "")
+        self.assertEqual(
+            config["distance_between_cameras_m"], module.DEFAULT_DISTANCE_BETWEEN_CAMERAS_M
+        )
+        self.assertEqual(
+            config["second_appearance_timeout_sec"],
+            module.DEFAULT_SECOND_APPEARANCE_TIMEOUT_SEC,
+        )
+
+    def test_reads_forwarded_user_settings(self):
+        config = module.read_camera_config(
+            {
+                "camera_1_id": CAMERA_1_ID,
+                "camera_2_id": CAMERA_2_ID,
+                "distance_between_cameras_m": "150.5",
+                "second_appearance_timeout_sec": "90",
+            }
+        )
+        self.assertEqual(config["camera_1_id"], CAMERA_1_ID)
+        self.assertEqual(config["camera_2_id"], CAMERA_2_ID)
+        self.assertEqual(config["distance_between_cameras_m"], 150.5)
+        self.assertEqual(config["second_appearance_timeout_sec"], 90.0)
+
+    def test_strips_whitespace_around_camera_ids(self):
+        config = module.read_camera_config({"camera_1_id": f"  {CAMERA_1_ID}  "})
+        self.assertEqual(config["camera_1_id"], CAMERA_1_ID)
+
+    def test_non_numeric_distance_falls_back_to_default(self):
+        config = module.read_camera_config({"distance_between_cameras_m": "not-a-number"})
+        self.assertEqual(
+            config["distance_between_cameras_m"], module.DEFAULT_DISTANCE_BETWEEN_CAMERAS_M
+        )
+
+    def test_non_numeric_timeout_falls_back_to_default(self):
+        config = module.read_camera_config({"second_appearance_timeout_sec": "not-a-number"})
+        self.assertEqual(
+            config["second_appearance_timeout_sec"],
+            module.DEFAULT_SECOND_APPEARANCE_TIMEOUT_SEC,
+        )
+
+
+class TestGetFloatSetting(unittest.TestCase):
+    def test_valid_value_is_parsed(self):
+        self.assertEqual(module._get_float_setting({"x": "12.5"}, "x", 1.0), 12.5)
+
+    def test_missing_key_uses_default(self):
+        self.assertEqual(module._get_float_setting({}, "x", 1.0), 1.0)
+
+    def test_invalid_value_uses_default(self):
+        self.assertEqual(module._get_float_setting({"x": "abc"}, "x", 1.0), 1.0)
+
+    def test_none_value_uses_default(self):
+        self.assertEqual(module._get_float_setting({"x": None}, "x", 1.0), 1.0)
 
 
 class TestExtractLicensePlates(unittest.TestCase):
-    """Tests for _extract_license_plates_from_message() function."""
-    
+    def test_returns_object_id_and_plate(self):
+        message = _detector_message([_object("obj-1", "ABC123")])
+        self.assertEqual(module._extract_license_plates(message), [("obj-1", "ABC123")])
+
+    def test_strips_surrounding_whitespace(self):
+        message = _detector_message([_object("obj-1", "  ABC123 ")])
+        self.assertEqual(module._extract_license_plates(message), [("obj-1", "ABC123")])
+
+    def test_multiple_objects(self):
+        message = _detector_message(
+            [_object("obj-1", "ABC123"), _object("obj-2", "XYZ789")]
+        )
+        self.assertEqual(
+            module._extract_license_plates(message),
+            [("obj-1", "ABC123"), ("obj-2", "XYZ789")],
+        )
+
+    def test_skips_object_without_track_id(self):
+        message = _detector_message([_object(None, "ABC123")])
+        self.assertEqual(module._extract_license_plates(message), [])
+
+    def test_skips_object_without_recognized_text(self):
+        message = _detector_message([_object("obj-1")])
+        self.assertEqual(module._extract_license_plates(message), [])
+
+    def test_skips_blank_recognized_text(self):
+        message = _detector_message([_object("obj-1", "   ")])
+        self.assertEqual(module._extract_license_plates(message), [])
+
+
+class TestHandleMessage(unittest.TestCase):
     def setUp(self):
-        """Set up test fixtures."""
-        self.detection_time = datetime.now()
-    
-    def test_extract_license_plates_with_timestamp(self):
-        """Test extracting license plates from DetectorMessage with valid timestamp."""
-        message = DetectorMessage({
-            "DeviceID": "3645c7ee-ca91-e579-e753-1d85af1fd08c",
-            "Timestamp": self.detection_time.timestamp(),
-            "BBoxes_xyxy": {"lp": [0, 0, 10, 10]},
-            "ObjectsMetaData": {
-                "lp": {
-                    "ObjectIDs": ["obj-1"],
-                    "AttributeKeys": [["License Plate Text", "Confidence"]],
-                    "AttributeValues": [["ABC123", "0.95"]]
-                }
-            }
-        })
-        results = module._extract_license_plates_from_message(message)
-        self.assertEqual(len(results), 1)
-        object_id, license_plate, device_id, timestamp = results[0]
-        self.assertEqual(object_id, "obj-1")
-        self.assertEqual(license_plate, "ABC123")
-        self.assertEqual(device_id, "3645c7ee-ca91-e579-e753-1d85af1fd08c")
-        self.assertIsInstance(timestamp, datetime)
-    
-    def test_extract_license_plates_no_timestamp(self):
-        """Test handling message without timestamp."""
-        message = DetectorMessage({
-            "DeviceID": "3645c7ee-ca91-e579-e753-1d85af1fd08c",
-            "BBoxes_xyxy": {"lp": [0, 0, 10, 10]},
-            "ObjectsMetaData": {
-                "lp": {
-                    "ObjectIDs": ["obj-1"],
-                    "AttributeKeys": [["recognized_text"]],
-                    "AttributeValues": [["ABC123"]]
-                }
-            }
-        })
-        
-        results = module._extract_license_plates_from_message(message)
-        self.assertEqual(results, [])
-    
-    def test_extract_license_plates_invalid_timestamp(self):
-        """Test handling invalid timestamp type."""
-        message = DetectorMessage({
-            "DeviceID": "3645c7ee-ca91-e579-e753-1d85af1fd08c",
-            "Timestamp": datetime.now().timestamp(),  # Valid timestamp in message
-            "BBoxes_xyxy": {"lp": [0, 0, 10, 10]},
-            "ObjectsMetaData": {
-                "lp": {
-                    "ObjectIDs": ["obj-1"],
-                    "AttributeKeys": [["recognized_text"]],
-                    "AttributeValues": [["ABC123"]]
-                }
-            }
-        })
-        
-        # Patch timestamp property to return non-datetime value
-        with patch.object(type(message), 'timestamp', new_callable=unittest.mock.PropertyMock) as mock_timestamp:
-            mock_timestamp.return_value = "invalid-timestamp"
-            with patch.object(module.logger, 'warning') as mock_warning:
-                results = module._extract_license_plates_from_message(message)
-                self.assertEqual(results, [])
-                mock_warning.assert_called_once()
-    
-    def test_extract_license_plates_multiple_plates(self):
-        """Test extracting multiple license plates from one message."""
-        message = DetectorMessage({
-            "DeviceID": "3645c7ee-ca91-e579-e753-1d85af1fd08c",
-            "Timestamp": self.detection_time.timestamp(),
-            "BBoxes_xyxy": {"lp": [0, 0, 10, 10, 20, 20, 30, 30]},
-            "ObjectsMetaData": {
-                "lp": {
-                    "ObjectIDs": ["obj-1", "obj-2"],
-                    "AttributeKeys": [
-                        ["License Plate Text", "Confidence"],
-                        ["License Plate Text", "Confidence"]
-                    ],
-                    "AttributeValues": [
-                        ["ABC123", "0.95"],
-                        ["XYZ789", "0.88"]
-                    ]
-                }
-            }
-        })
-        
-        results = module._extract_license_plates_from_message(message)
-        self.assertEqual(len(results), 2)
-        plates = [r[1] for r in results]
-        self.assertIn("ABC123", plates)
-        self.assertIn("XYZ789", plates)
-    
-    def test_extract_license_plates_no_recognized_text(self):
-        """Test handling message without recognized_text attribute."""
-        message = DetectorMessage({
-            "DeviceID": "3645c7ee-ca91-e579-e753-1d85af1fd08c",
-            "Timestamp": self.detection_time.timestamp(),
-            "BBoxes_xyxy": {"lp": [0, 0, 10, 10]},
-            "ObjectsMetaData": {
-                "lp": {
-                    "ObjectIDs": ["obj-1"],
-                    "AttributeKeys": [["confidence"]],
-                    "AttributeValues": [["0.95"]]
-                }
-            }
-        })
-        
-        results = module._extract_license_plates_from_message(message)
-        self.assertEqual(results, [])
-    
-    def test_extract_license_plates_empty_text(self):
-        """Test handling empty license plate text."""
-        message = DetectorMessage({
-            "DeviceID": "3645c7ee-ca91-e579-e753-1d85af1fd08c",
-            "Timestamp": self.detection_time.timestamp(),
-            "BBoxes_xyxy": {"lp": [0, 0, 10, 10]},
-            "ObjectsMetaData": {
-                "lp": {
-                    "ObjectIDs": ["obj-1"],
-                    "AttributeKeys": [["recognized_text"]],
-                    "AttributeValues": [[""]]
-                }
-            }
-        })
-        
-        results = module._extract_license_plates_from_message(message)
-        self.assertEqual(results, [])
-    
-    def test_extract_license_plates_invalid_structure(self):
-        """Test handling invalid metadata structure."""
-        message = DetectorMessage({
-            "DeviceID": "3645c7ee-ca91-e579-e753-1d85af1fd08c",
-            "Timestamp": self.detection_time.timestamp(),
-            "BBoxes_xyxy": {"lp": [0, 0, 10, 10]},
-            "ObjectsMetaData": {
-                "lp": {
-                    "ObjectIDs": ["obj-1"],
-                    "AttributeKeys": "invalid",  # Should be list
-                    "AttributeValues": [["ABC123"]]
-                }
-            }
-        })
-        
-        results = module._extract_license_plates_from_message(message)
-        self.assertEqual(results, [])
+        self.ocr_cache = OcrCache(engine=None, output_name=module.DEFAULT_OCR_OUTPUT_NAME)
+        self.speed_cache = SpeedMeasurementCache()
+        self.speed_cache.update_config(CAMERA_1_ID, CAMERA_2_ID, 100.0, 60.0)
+        self.addCleanup(self.speed_cache.stop)
+        self.first_seen = datetime.now()
+
+    def _handle(self, message, camera_config=None):
+        return module.handle_message(
+            message, self.ocr_cache, self.speed_cache, camera_config or _camera_config()
+        )
+
+    def test_ocr_message_is_decoded_but_not_speed_tracked(self):
+        import numpy as np
+
+        sdk_msg = ObjectsPostProcessorMessage()
+        sdk_msg.original_object_id = "obj-1"
+        logits = np.zeros(module.EXPECTED_LOGITS_SHAPE, dtype=np.float32)
+        logits[0, 10] = 1.0  # 'A'
+        message = CctOcrMessage(
+            sdk_msg, [{"Name": module.DEFAULT_OCR_OUTPUT_NAME, "Data": logits.tobytes()}]
+        )
+        self.ocr_cache = OcrCache(
+            LogitsOcrEngine(
+                expected_logits_shape=module.EXPECTED_LOGITS_SHAPE,
+                char_map=module.CHAR_MAP,
+            ),
+            module.DEFAULT_OCR_OUTPUT_NAME,
+        )
+
+        result = self._handle(message)
+
+        self.assertIs(result, message)
+        self.assertEqual(sdk_msg.events, [])
+        cached = self.ocr_cache.get_cached_result("obj-1")
+        self.assertIsNotNone(cached)
+        self.assertTrue(cached[0].startswith("A"))
+
+    def test_single_camera_sighting_emits_nothing(self):
+        message = _detector_message(
+            [_object("obj-1", "ABC123")],
+            device_id=CAMERA_1_ID,
+            timestamp=_microseconds(self.first_seen),
+        )
+
+        self._handle(message)
+
+        self.assertEqual(message._msg.events, [])
+        self.assertNotIn("Speed", message._msg.objects["lp"][0].attributes)
+
+    def test_second_camera_sighting_emits_event_and_speed_attribute(self):
+        first = _detector_message(
+            [_object("obj-1", "ABC123")],
+            device_id=CAMERA_1_ID,
+            timestamp=_microseconds(self.first_seen),
+        )
+        self._handle(first)
+
+        # 100 m in 5 s == 20 m/s == 72.0 km/h.
+        second = _detector_message(
+            [_object("obj-2", "ABC123")],
+            device_id=CAMERA_2_ID,
+            timestamp=_microseconds(self.first_seen + timedelta(seconds=5)),
+        )
+        self._handle(second)
+
+        self.assertEqual(len(second._msg.events), 1)
+        event = second._msg.events[0]
+        self.assertEqual(event.type_id, module.EVENT_ID_SPEED_MEASUREMENT)
+        self.assertIn("ABC123", event.description)
+        self.assertIn("72.0 km/h", event.description)
+        self.assertEqual(second._msg.objects["lp"][0].attributes["Speed"], "72.0")
+
+    def test_later_frame_reattaches_cached_speed_without_new_event(self):
+        self._handle(
+            _detector_message(
+                [_object("obj-1", "ABC123")],
+                device_id=CAMERA_1_ID,
+                timestamp=_microseconds(self.first_seen),
+            )
+        )
+        self._handle(
+            _detector_message(
+                [_object("obj-2", "ABC123")],
+                device_id=CAMERA_2_ID,
+                timestamp=_microseconds(self.first_seen + timedelta(seconds=5)),
+            )
+        )
+
+        later = _detector_message(
+            [_object("obj-3", "ABC123")],
+            device_id=CAMERA_2_ID,
+            timestamp=_microseconds(self.first_seen + timedelta(seconds=6)),
+        )
+        self._handle(later)
+
+        self.assertEqual(later._msg.events, [])
+        self.assertEqual(later._msg.objects["lp"][0].attributes["Speed"], "72.0")
+
+    def test_unconfigured_cameras_disable_speed_tracking(self):
+        first = _detector_message(
+            [_object("obj-1", "ABC123")],
+            device_id=CAMERA_1_ID,
+            timestamp=_microseconds(self.first_seen),
+        )
+        self._handle(first, _camera_config(camera_1_id="", camera_2_id=""))
+
+        second = _detector_message(
+            [_object("obj-2", "ABC123")],
+            device_id=CAMERA_2_ID,
+            timestamp=_microseconds(self.first_seen + timedelta(seconds=5)),
+        )
+        self._handle(second, _camera_config(camera_1_id="", camera_2_id=""))
+
+        self.assertEqual(second._msg.events, [])
+
+    def test_non_positive_distance_disables_speed_tracking(self):
+        message = _detector_message(
+            [_object("obj-1", "ABC123")],
+            device_id=CAMERA_1_ID,
+            timestamp=_microseconds(self.first_seen),
+        )
+        self._handle(message, _camera_config(distance_between_cameras_m=0.0))
+
+        self.assertEqual(message._msg.events, [])
+
+    def test_non_positive_timeout_disables_speed_tracking(self):
+        message = _detector_message(
+            [_object("obj-1", "ABC123")],
+            device_id=CAMERA_1_ID,
+            timestamp=_microseconds(self.first_seen),
+        )
+        self._handle(message, _camera_config(second_appearance_timeout_sec=0.0))
+
+        self.assertEqual(message._msg.events, [])
+
+    def test_message_without_timestamp_is_skipped(self):
+        message = _detector_message(
+            [_object("obj-1", "ABC123")], device_id=CAMERA_1_ID, timestamp=None
+        )
+
+        self._handle(message)
+
+        self.assertEqual(message._msg.events, [])
+
+    def test_sighting_on_unconfigured_camera_is_ignored(self):
+        other_camera = "00000000-0000-0000-0000-000000000000"
+        self._handle(
+            _detector_message(
+                [_object("obj-1", "ABC123")],
+                device_id=other_camera,
+                timestamp=_microseconds(self.first_seen),
+            )
+        )
+        second = _detector_message(
+            [_object("obj-2", "ABC123")],
+            device_id=CAMERA_2_ID,
+            timestamp=_microseconds(self.first_seen + timedelta(seconds=5)),
+        )
+        self._handle(second)
+
+        self.assertEqual(second._msg.events, [])
+
+    def test_cached_ocr_result_becomes_a_tracked_plate(self):
+        class _FakeOcrMessage:
+            original_object_id = "obj-1"
+
+        self.ocr_cache.cache_ocr_result(_FakeOcrMessage(), "ABC123", 0.97)
+
+        message = _detector_message(
+            [_object("obj-1")],
+            device_id=CAMERA_1_ID,
+            timestamp=_microseconds(self.first_seen),
+        )
+        self._handle(message)
+
+        obj = message._msg.objects["lp"][0]
+        self.assertEqual(obj.attributes["License Plate Text"], "ABC123")
+        self.assertEqual(self.speed_cache.get_speed("ABC123"), None)
+
+        second = _detector_message(
+            [_object("obj-2", "ABC123")],
+            device_id=CAMERA_2_ID,
+            timestamp=_microseconds(self.first_seen + timedelta(seconds=5)),
+        )
+        self._handle(second)
+        self.assertEqual(len(second._msg.events), 1)
 
 
-class TestMergeSpeedSettings(unittest.TestCase):
-    """Tests for _merge_speed_settings()."""
+class TestResponseEchoesCorrelationFields(unittest.TestCase):
+    def setUp(self):
+        self.ocr_cache = OcrCache(engine=None, output_name=module.DEFAULT_OCR_OUTPUT_NAME)
+        self.speed_cache = SpeedMeasurementCache()
+        self.speed_cache.update_config(CAMERA_1_ID, CAMERA_2_ID, 100.0, 60.0)
+        self.addCleanup(self.speed_cache.stop)
 
-    def test_merge_uses_ini_when_no_ui(self):
-        """When ui_settings is empty, INI values are returned."""
-        settings = {
-            "camera_1_id": "cam1",
-            "camera_2_id": "cam2",
-            "distance_between_cameras_m": 50.0,
-            "second_appearance_timeout_sec": 30.0,
-        }
-        result = module._merge_speed_settings(settings, {})
-        self.assertEqual(result["camera_1_id"], "cam1")
-        self.assertEqual(result["camera_2_id"], "cam2")
-        self.assertEqual(result["distance_between_cameras_m"], 50.0)
-        self.assertEqual(result["second_appearance_timeout_sec"], 30.0)
+    def test_serialized_response_carries_the_requests_device_id_and_timestamp(self):
+        # The AI Manager routes a response back to the camera that asked for it by
+        # the key DeviceID + "|" + Timestamp. A
+        # response that does not echo both fields back unchanged is dropped
+        # silently -- no log line anywhere -- so nothing but this assertion
+        # catches a processor that answers with a freshly built message.
+        # The comparison is against the serialized frame, which is what the
+        # plugin actually reads.
+        message = _detector_message(
+            [_object("obj-1", "ABC123")],
+            device_id=CAMERA_1_ID,
+            timestamp=ECHOED_TIMESTAMP,
+        )
 
-    def test_merge_ui_overrides_ini(self):
-        """UI settings override INI when present and valid."""
-        settings = {
-            "camera_1_id": "ini_cam1",
-            "camera_2_id": "ini_cam2",
-            "distance_between_cameras_m": 100.0,
-            "second_appearance_timeout_sec": 60.0,
-        }
-        ui = {
-            module.UI_SETTINGS_PREFIX + "camera_1_id": "ui_cam1",
-            module.UI_SETTINGS_PREFIX + "camera_2_id": "ui_cam2",
-            module.UI_SETTINGS_PREFIX + "distance_between_cameras_m": 200.0,
-            module.UI_SETTINGS_PREFIX + "second_appearance_timeout_sec": 120.0,
-        }
-        result = module._merge_speed_settings(settings, ui)
-        self.assertEqual(result["camera_1_id"], "ui_cam1")
-        self.assertEqual(result["camera_2_id"], "ui_cam2")
-        self.assertEqual(result["distance_between_cameras_m"], 200.0)
-        self.assertEqual(result["second_appearance_timeout_sec"], 120.0)
+        result = module.handle_message(
+            message, self.ocr_cache, self.speed_cache, _camera_config()
+        )
 
-    def test_merge_invalid_ui_number_keeps_ini(self):
-        """Invalid UI number leaves INI value."""
-        settings = {
-            "camera_1_id": "c1",
-            "camera_2_id": "c2",
-            "distance_between_cameras_m": 80.0,
-            "second_appearance_timeout_sec": 40.0,
-        }
-        ui = {
-            module.UI_SETTINGS_PREFIX + "distance_between_cameras_m": "not_a_number",
-        }
-        result = module._merge_speed_settings(settings, ui)
-        self.assertEqual(result["distance_between_cameras_m"], 80.0)
+        serialized = msgpack.unpackb(result.to_bytes(), raw=False)
+        self.assertEqual(CAMERA_1_ID, serialized["DeviceID"])
+        self.assertEqual(ECHOED_TIMESTAMP, serialized["Timestamp"])
 
 
-class TestMainFiltering(unittest.TestCase):
-    """Tests for main() function - DeviceID filtering."""
+class TestRegistrationJson(unittest.TestCase):
+    def test_declares_receive_binary_data(self):
+        with open(
+            os.path.join(script_dir, "external_postprocessors.json"), encoding="utf-8"
+        ) as handle:
+            entries = json.load(handle)
+
+        self.assertTrue(
+            entries[0].get("ReceiveBinaryData") is True,
+            "external_postprocessors.json must set ReceiveBinaryData: true — "
+            "the OCR path reads Tensors (base/messages.py get_binary_output_f32)",
+        )
+
+    def test_emits_the_event_id_exactly_as_declared(self):
+        """The mediaserver drops an emitted id that differs from Events[].ID."""
+        with open(
+            os.path.join(script_dir, "external_postprocessors.json"), encoding="utf-8"
+        ) as handle:
+            entry = json.load(handle)[0]
+
+        declared = [event["ID"] for event in entry["Events"]]
+        self.assertEqual(declared, ["speed.measurement"])
+        self.assertEqual(module.EVENT_ID_SPEED_MEASUREMENT, declared[0])
+
+    def test_declares_every_user_setting_the_processor_reads(self):
+        with open(
+            os.path.join(script_dir, "external_postprocessors.json"), encoding="utf-8"
+        ) as handle:
+            entry = json.load(handle)[0]
+
+        declared = {setting["name"] for setting in entry["UserSettings"]}
+        self.assertEqual(declared, set(module.read_camera_config({}).keys()))
+
+    def test_readme_snippet_matches_registration_json(self):
+        """The README snippet is what operators copy — it must not drift."""
+        with open(
+            os.path.join(script_dir, "external_postprocessors.json"), encoding="utf-8"
+        ) as handle:
+            entry = json.load(handle)[0]
+        with open(os.path.join(script_dir, "README.md"), encoding="utf-8") as handle:
+            readme = handle.read()
+
+        blocks = re.findall(r"```json\n(.*?)```", readme, re.DOTALL)
+        self.assertEqual(len(blocks), 1, "README must carry exactly one json snippet")
+
+        self.assertEqual(json.loads(blocks[0]), entry)
+
+
+EXIT = object()  # Sentinel script item: simulates IpcSignal.EXIT via exit_requested.
+
+
+class _FakeProcessor:
+    """Replays a scripted sequence of wait_for_message() outcomes.
+
+    A `StopIteration`-terminated script would be swallowed by the loop's own
+    except clause, so the script ends with KeyboardInterrupt, which the loop
+    deliberately does not catch.
+    """
+
+    def __init__(self, script, send_results=None):
+        self._script = list(script)
+        self._send_results = list(send_results or [])
+        self.sent = []
+        self.exit_requested = False
+
+    def wait_for_message(self, timeout_ms=None):
+        if not self._script:
+            raise KeyboardInterrupt
+        item = self._script.pop(0)
+        if item is EXIT:
+            self.exit_requested = True
+            return None
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    def send_response(self, data):
+        self.sent.append(data)
+        if self._send_results:
+            return self._send_results.pop(0)
+        return True
+
+
+class TestMessageLoopSurvivability(unittest.TestCase):
+    """The engine keeps sending frames; a processor that exits is dropped."""
 
     def setUp(self):
-        """Set up test fixtures."""
-        mock_comm.parseInferenceResults.return_value = MagicMock(spec=[])
-        self.settings = {
-            "socket_path": "/tmp/test.sock",
-            "camera_1_id": "3645c7ee-ca91-e579-e753-1d85af1fd08c",
-            "camera_2_id": "e3e9a385-7fe0-3ba5-5482-a86cde7faf48",
-            "ocr_output_name": "Identity:0",
-            "nxai_utilities_path": os.path.join(script_dir, "../nxai-utilities/python-utilities")
-        }
-        self.engine = MagicMock()
-    
-    @patch('nxai_communication_utils.SocketListener')
-    def test_main_exits_on_exit_signal(self, mock_listener_cls):
-        """main() must break out of the loop cleanly when ExitSignal is received."""
-        mock_comm.parseInferenceResults.return_value = MockExitSignal()
+        self.ocr_cache = OcrCache(engine=None, output_name=module.DEFAULT_OCR_OUTPUT_NAME)
+        self.speed_cache = SpeedMeasurementCache()
+        self.speed_cache.update_config(CAMERA_1_ID, CAMERA_2_ID, 100.0, 60.0)
+        self.addCleanup(self.speed_cache.stop)
+        self.good = _detector_message(
+            [_object("obj-1", "ABC123")],
+            timestamp=_microseconds(datetime.now()),
+        ).to_bytes()
 
-        mock_server = mock_listener_cls.return_value
-        mock_conn = MagicMock()
-        mock_server.accept.return_value = (mock_conn, b"exit_data")
-
-        # main() should return normally (no exception, no infinite loop)
-        module.main(self.settings, self.engine)
-
-        mock_conn.close.assert_called()
-
-    @patch('nxai_communication_utils.SocketListener')
-    def test_main_filters_by_device_id(self, mock_listener_cls):
-        """Test that messages from unknown cameras are returned unchanged."""
-        mock_server = mock_listener_cls.return_value
-        mock_conn = MagicMock()
-        
-        # Create message from unknown camera
-        unknown_message = GenericMessage({
-            "DeviceID": "00000000-0000-0000-0000-000000000000",
-            "Timestamp": datetime.now().timestamp()
-        })
-        
-        mock_server.accept.side_effect = [
-            (mock_conn, b"raw_data"),
-            KeyboardInterrupt
-        ]
-        
-        with patch.object(module, 'create_anpr_message_from_bytes', return_value=unknown_message):
-            with self.assertRaises(KeyboardInterrupt):
-                module.main(self.settings, self.engine)
-            
-            # Message should be sent back unchanged
-            mock_conn.send.assert_called_once()
-            mock_conn.close.assert_called()
-    
-    @patch('nxai_communication_utils.SocketListener')
-    def test_main_processes_known_camera(self, mock_listener_cls):
-        """Test that messages from known cameras are processed."""
-        mock_server = mock_listener_cls.return_value
-        mock_conn = MagicMock()
-        
-        # Create message from known camera
-        known_message = DetectorMessage({
-            "DeviceID": "3645c7ee-ca91-e579-e753-1d85af1fd08c",
-            "Timestamp": datetime.now().timestamp(),
-            "BBoxes_xyxy": {"lp": [0, 0, 10, 10]},
-            "ObjectsMetaData": {}
-        })
-        
-        mock_server.accept.side_effect = [
-            (mock_conn, b"raw_data"),
-            KeyboardInterrupt
-        ]
-        
-        with patch.object(module, 'create_anpr_message_from_bytes', return_value=known_message):
-            with patch.object(known_message, 'handle') as mock_handle:
-                with patch.object(SpeedDetectorMessage, 'to_bytes', return_value=b"processed"):
-                    with self.assertRaises(KeyboardInterrupt):
-                        module.main(self.settings, self.engine)
-                    mock_handle.assert_called_once()
-                    mock_conn.send.assert_called_once_with(b"processed")
-    
-    @patch('nxai_communication_utils.SocketListener')
-    def test_main_handles_socket_timeout(self, mock_listener_cls):
-        """Test handling SocketTimeout exceptions."""
-        mock_server = mock_listener_cls.return_value
-        mock_server.accept.side_effect = [
-            MockSocketTimeout,
-            KeyboardInterrupt
-        ]
-        
+    def _run(self, processor):
         with self.assertRaises(KeyboardInterrupt):
-            module.main(self.settings, self.engine)
-    
-    @patch('nxai_communication_utils.SocketListener')
-    def test_main_handles_send_error(self, mock_listener_cls):
-        """Test handling errors when sending response."""
-        mock_server = mock_listener_cls.return_value
-        mock_conn = MagicMock()
-        mock_conn.send.side_effect = Exception("Send failed")
-        
-        known_message = DetectorMessage({
-            "DeviceID": "3645c7ee-ca91-e579-e753-1d85af1fd08c",
-            "Timestamp": datetime.now().timestamp(),
-            "BBoxes_xyxy": {"lp": [0, 0, 10, 10]},
-            "ObjectsMetaData": {}
-        })
-        
-        mock_server.accept.side_effect = [
-            (mock_conn, b"raw_data"),
-            KeyboardInterrupt
-        ]
-        
-        with patch.object(module, 'create_anpr_message_from_bytes', return_value=known_message):
-            with patch.object(known_message, 'handle'):
-                with patch.object(known_message, 'to_bytes', return_value=b"processed"):
-                    with patch.object(module.logger, 'warning') as mock_warning:
-                        with self.assertRaises(KeyboardInterrupt):
-                            module.main(self.settings, self.engine)
-                        
-                        mock_warning.assert_called()
-                        mock_conn.close.assert_called()
+            module.run_message_loop(processor, self.ocr_cache, self.speed_cache)
+
+    def test_unparsable_message_does_not_end_the_loop(self):
+        processor = _FakeProcessor([b"\xc1not-msgpack", self.good])
+        self._run(processor)
+        self.assertEqual(
+            len(processor.sent), 1, "the message after a bad one must still be served"
+        )
+
+    def test_raising_message_does_not_end_the_loop(self):
+        processor = _FakeProcessor([RuntimeError("transport hiccup"), self.good])
+        self._run(processor)
+        self.assertEqual(len(processor.sent), 1)
+
+    def test_timeout_does_not_end_the_loop(self):
+        processor = _FakeProcessor([None, None, self.good])
+        self._run(processor)
+        self.assertEqual(len(processor.sent), 1)
+
+    def test_exit_signal_ends_the_loop_cleanly(self):
+        # A graceful EXIT must return, not be swallowed as a plain timeout
+        # that keeps the loop spinning until the AI Manager kills the process.
+        processor = _FakeProcessor([EXIT, self.good])
+        module.run_message_loop(processor, self.ocr_cache, self.speed_cache)
+        self.assertEqual(
+            len(processor.sent), 0, "loop must stop before serving the next message"
+        )
+
+    def test_parsed_message_still_gets_a_response_when_handling_fails(self):
+        # A frame that was successfully parsed must not be silently dropped:
+        # the engine still needs a response for it, even if handling blew up.
+        processor = _FakeProcessor([self.good])
+        with patch.object(module, "handle_message", side_effect=RuntimeError("boom")):
+            with self.assertRaises(KeyboardInterrupt):
+                module.run_message_loop(processor, self.ocr_cache, self.speed_cache)
+        self.assertEqual(len(processor.sent), 1)
+
+    def test_failed_send_ends_the_loop(self):
+        processor = _FakeProcessor([self.good, self.good], send_results=[False])
+        # Returns instead of raising: the script's second message is never read.
+        module.run_message_loop(processor, self.ocr_cache, self.speed_cache)
+        self.assertEqual(len(processor.sent), 1)
 
 
-class TestMainSpeedCache(unittest.TestCase):
-    """Tests for main() function - SpeedMeasurementCache integration."""
-
-    def setUp(self):
-        """Set up test fixtures."""
-        mock_comm.parseInferenceResults.return_value = MagicMock(spec=[])
-        self.settings = {
-            "socket_path": "/tmp/test.sock",
-            "camera_1_id": "3645c7ee-ca91-e579-e753-1d85af1fd08c",
-            "camera_2_id": "e3e9a385-7fe0-3ba5-5482-a86cde7faf48",
-            "ocr_output_name": "Identity:0",
-            "nxai_utilities_path": os.path.join(script_dir, "../nxai-utilities/python-utilities")
-        }
-        self.engine = MagicMock()
-        self.speed_cache = MagicMock(spec=SpeedMeasurementCache)
-    
-    @patch('nxai_communication_utils.SocketListener')
-    def test_main_adds_detections_to_speed_cache(self, mock_listener_cls):
-        """Test that license plates are added to speed_cache for DetectorMessage."""
-        mock_server = mock_listener_cls.return_value
-        mock_conn = MagicMock()
-        
-        detection_time = datetime.now()
-        message = DetectorMessage({
-            "DeviceID": "3645c7ee-ca91-e579-e753-1d85af1fd08c",
-            "Timestamp": detection_time.timestamp(),
-            "BBoxes_xyxy": {"lp": [0, 0, 10, 10]},
-            "ObjectsMetaData": {
-                "lp": {
-                    "ObjectIDs": ["obj-1"],
-                    "AttributeKeys": [["License Plate Text", "Confidence"]],
-                    "AttributeValues": [["ABC123", "0.95"]]
-                }
-            }
-        })
-        self.speed_cache.add_detection.return_value = None
-        self.speed_cache.get_speed.return_value = None
-        mock_server.accept.side_effect = [
-            (mock_conn, b"raw_data"),
-            KeyboardInterrupt
-        ]
-        with patch.object(module, 'create_anpr_message_from_bytes', return_value=message):
-            with patch.object(message, 'handle'):
-                with patch.object(message, 'to_bytes', return_value=b"processed"):
-                    with self.assertRaises(KeyboardInterrupt):
-                        module.main(self.settings, self.engine, speed_cache=self.speed_cache)
-                    self.speed_cache.add_detection.assert_called_once_with(
-                        "ABC123",
-                        "3645c7ee-ca91-e579-e753-1d85af1fd08c",
-                        unittest.mock.ANY  # datetime object
-                    )
-    
-    @patch('nxai_communication_utils.SocketListener')
-    def test_main_skips_speed_cache_for_non_detector(self, mock_listener_cls):
-        """Test that speed_cache is not used for non-DetectorMessage."""
-        mock_server = mock_listener_cls.return_value
-        mock_conn = MagicMock()
-        
-        ocr_message = CctOcrMessage({
-            "DeviceID": "3645c7ee-ca91-e579-e753-1d85af1fd08c",
-            "Timestamp": datetime.now().timestamp(),
-            "OriginalObjectID": "obj-1",
-            "BinaryOutputs": []
-        })
-        
-        mock_server.accept.side_effect = [
-            (mock_conn, b"raw_data"),
-            KeyboardInterrupt
-        ]
-        
-        with patch.object(module, 'create_anpr_message_from_bytes', return_value=ocr_message):
-            with patch.object(ocr_message, 'handle'):
-                with patch.object(ocr_message, 'to_bytes', return_value=b"processed"):
-                    with self.assertRaises(KeyboardInterrupt):
-                        module.main(self.settings, self.engine, speed_cache=self.speed_cache)
-                    
-                    # Speed cache should not be called
-                    self.speed_cache.add_detection.assert_not_called()
-
-    @patch('nxai_communication_utils.SocketListener')
-    def test_main_calls_update_config_when_external_processor_settings_present(
-        self, mock_listener_cls
-    ):
-        """When message has ExternalProcessorSettings, speed_cache.update_config is called."""
-        mock_server = mock_listener_cls.return_value
-        mock_conn = MagicMock()
-        detection_time = datetime.now()
-        message = DetectorMessage({
-            "DeviceID": "3645c7ee-ca91-e579-e753-1d85af1fd08c",
-            "Timestamp": detection_time.timestamp(),
-            "BBoxes_xyxy": {"lp": [0, 0, 10, 10]},
-            "ObjectsMetaData": {
-                "lp": {
-                    "ObjectIDs": ["obj-1"],
-                    "AttributeKeys": [["License Plate Text", "confidence"]],
-                    "AttributeValues": [["ABC123", "0.95"]],
-                }
-            },
-            "ExternalProcessorSettings": {
-                module.UI_SETTINGS_PREFIX + "camera_1_id": "3645c7ee-ca91-e579-e753-1d85af1fd08c",
-                module.UI_SETTINGS_PREFIX + "camera_2_id": "e3e9a385-7fe0-3ba5-5482-a86cde7faf48",
-                module.UI_SETTINGS_PREFIX + "distance_between_cameras_m": 150.0,
-                module.UI_SETTINGS_PREFIX + "second_appearance_timeout_sec": 90.0,
-            },
-        })
-        self.speed_cache.add_detection.return_value = None
-        self.speed_cache.get_speed.return_value = None
-        mock_server.accept.side_effect = [
-            (mock_conn, b"raw_data"),
-            KeyboardInterrupt
-        ]
-        with patch.object(module, 'create_anpr_message_from_bytes', return_value=message):
-            with patch.object(message, 'handle'):
-                with patch.object(message, 'to_bytes', return_value=b"processed"):
-                    with self.assertRaises(KeyboardInterrupt):
-                        module.main(self.settings, self.engine, speed_cache=self.speed_cache)
-        self.speed_cache.update_config.assert_called_once()
-        call_args = self.speed_cache.update_config.call_args[0]
-        self.assertEqual(call_args[0], "3645c7ee-ca91-e579-e753-1d85af1fd08c")
-        self.assertEqual(call_args[1], "e3e9a385-7fe0-3ba5-5482-a86cde7faf48")
-        self.assertEqual(call_args[2], 150.0)
-        self.assertEqual(call_args[3], 90.0)
-    
-    @patch('nxai_communication_utils.SocketListener')
-    def test_main_skips_speed_cache_when_none(self, mock_listener_cls):
-        """Test that processing continues without errors when speed_cache is None."""
-        mock_server = mock_listener_cls.return_value
-        mock_conn = MagicMock()
-        
-        message = DetectorMessage({
-            "DeviceID": "3645c7ee-ca91-e579-e753-1d85af1fd08c",
-            "Timestamp": datetime.now().timestamp(),
-            "BBoxes_xyxy": {"lp": [0, 0, 10, 10]},
-            "ObjectsMetaData": {
-                "lp": {
-                    "ObjectIDs": ["obj-1"],
-                    "AttributeKeys": [["recognized_text"]],
-                    "AttributeValues": [["ABC123"]]
-                }
-            }
-        })
-        
-        mock_server.accept.side_effect = [
-            (mock_conn, b"raw_data"),
-            KeyboardInterrupt
-        ]
-        
-        with patch.object(module, 'create_anpr_message_from_bytes', return_value=message):
-            with patch.object(message, 'handle'):
-                with patch.object(message, 'to_bytes', return_value=b"processed"):
-                    # Should not raise any errors
-                    with self.assertRaises(KeyboardInterrupt):
-                        module.main(self.settings, self.engine, speed_cache=None)
-    
-    @patch('nxai_communication_utils.SocketListener')
-    def test_main_generates_event_when_speed_calculated(self, mock_listener_cls):
-        """Test that event is added to message when speed is calculated."""
-        mock_server = mock_listener_cls.return_value
-        mock_conn = MagicMock()
-        
-        detection_time = datetime.now()
-        message = DetectorMessage({
-            "DeviceID": "e3e9a385-7fe0-3ba5-5482-a86cde7faf48",
-            "Timestamp": detection_time.timestamp(),
-            "BBoxes_xyxy": {"lp": [0, 0, 10, 10]},
-            "ObjectsMetaData": {
-                "lp": {
-                    "ObjectIDs": ["obj-1"],
-                    "AttributeKeys": [["License Plate Text", "Confidence"]],
-                    "AttributeValues": [["ABC123", "0.95"]]
-                }
-            }
-        })
-        self.speed_cache.add_detection.return_value = 20.0
-        self.speed_cache.get_speed.return_value = None
-        mock_server.accept.side_effect = [
-            (mock_conn, b"raw_data"),
-            KeyboardInterrupt
-        ]
-        with patch.object(module, 'create_anpr_message_from_bytes', return_value=message):
-            with patch.object(message, 'handle'):
-                with patch.object(message, 'to_bytes', return_value=b"processed"):
-                    with self.assertRaises(KeyboardInterrupt):
-                        module.main(self.settings, self.engine, speed_cache=self.speed_cache)
-                    self.assertIn("Events", message._message)
-                    events = message._message["Events"]
-                    self.assertEqual(len(events), 1)
-                    event = events[0]
-                    self.assertEqual(event["ID"], "speed.measurement")
-                    self.assertEqual(event["Caption"], "Speed Measurement")
-                    self.assertIn("ABC123", event["Description"])
-                    self.assertIn("72.0 km/h", event["Description"])
-
-
-class TestMessageTypes(unittest.TestCase):
-    """Tests for processing different message types."""
-
-    def setUp(self):
-        """Set up test fixtures."""
-        mock_comm.parseInferenceResults.return_value = MagicMock(spec=[])
-        self.settings = {
-            "socket_path": "/tmp/test.sock",
-            "camera_1_id": "3645c7ee-ca91-e579-e753-1d85af1fd08c",
-            "camera_2_id": "e3e9a385-7fe0-3ba5-5482-a86cde7faf48",
-            "ocr_output_name": "Identity:0",
-            "nxai_utilities_path": os.path.join(script_dir, "../nxai-utilities/python-utilities")
-        }
-        self.engine = MagicMock()
-    
-    @patch('nxai_communication_utils.SocketListener')
-    def test_main_processes_detector_message(self, mock_listener_cls):
-        """Test processing DetectorMessage with OCR sends response."""
-        mock_server = mock_listener_cls.return_value
-        mock_conn = MagicMock()
-        
-        message = DetectorMessage({
-            "DeviceID": "3645c7ee-ca91-e579-e753-1d85af1fd08c",
-            "Timestamp": datetime.now().timestamp(),
-            "BBoxes_xyxy": {"lp": [0, 0, 10, 10]},
-            "ObjectsMetaData": {}
-        })
-        
-        mock_server.accept.side_effect = [
-            (mock_conn, b"raw_data"),
-            KeyboardInterrupt
-        ]
-        
-        with patch.object(module, 'create_anpr_message_from_bytes', return_value=message):
-            with patch.object(message, 'handle') as mock_handle:
-                with patch.object(SpeedDetectorMessage, 'to_bytes', return_value=b"processed"):
-                    with self.assertRaises(KeyboardInterrupt):
-                        module.main(self.settings, self.engine)
-                    mock_handle.assert_called_once()
-                    mock_conn.send.assert_called_once_with(b"processed")
-                    mock_conn.close.assert_called()
-
-    @patch('nxai_communication_utils.SocketListener')
-    def test_main_calls_handle_for_all_message_types(self, mock_listener_cls):
-        """Test that handle() is called for all message types to process OCR."""
-        mock_server = mock_listener_cls.return_value
-        mock_conn = MagicMock()
-        
-        # Test with DetectorMessage
-        detector_message = DetectorMessage({
-            "DeviceID": "3645c7ee-ca91-e579-e753-1d85af1fd08c",
-            "Timestamp": datetime.now().timestamp(),
-            "BBoxes_xyxy": {"lp": [0, 0, 10, 10]},
-            "ObjectsMetaData": {}
-        })
-        
-        mock_server.accept.side_effect = [
-            (mock_conn, b"raw_data"),
-            KeyboardInterrupt
-        ]
-        
-        with patch.object(module, 'create_anpr_message_from_bytes', return_value=detector_message):
-            with patch.object(detector_message, 'handle') as mock_handle:
-                with patch.object(SpeedDetectorMessage, 'to_bytes', return_value=b"processed"):
-                    with self.assertRaises(KeyboardInterrupt):
-                        module.main(self.settings, self.engine)
-                    mock_handle.assert_called_once()
-                    mock_conn.send.assert_called_once_with(b"processed")
-    
-    @patch('nxai_communication_utils.SocketListener')
-    def test_main_processes_ocr_message(self, mock_listener_cls):
-        """Test processing OcrMessage sends response."""
-        mock_server = mock_listener_cls.return_value
-        mock_conn = MagicMock()
-        
-        message = CctOcrMessage({
-            "DeviceID": "3645c7ee-ca91-e579-e753-1d85af1fd08c",
-            "Timestamp": datetime.now().timestamp(),
-            "OriginalObjectID": "obj-1",
-            "BinaryOutputs": []
-        })
-        
-        mock_server.accept.side_effect = [
-            (mock_conn, b"raw_data"),
-            KeyboardInterrupt
-        ]
-        
-        with patch.object(module, 'create_anpr_message_from_bytes', return_value=message):
-            with patch.object(message, 'handle') as mock_handle:
-                with patch.object(message, 'to_bytes', return_value=b"processed"):
-                    with self.assertRaises(KeyboardInterrupt):
-                        module.main(self.settings, self.engine)
-                    
-                    mock_handle.assert_called_once()
-                    # Verify response is sent for OcrMessage
-                    mock_conn.send.assert_called_once_with(b"processed")
-                    mock_conn.close.assert_called()
-    
-    @patch('nxai_communication_utils.SocketListener')
-    def test_main_processes_generic_message(self, mock_listener_cls):
-        """Test processing GenericMessage sends response."""
-        mock_server = mock_listener_cls.return_value
-        mock_conn = MagicMock()
-        
-        message = GenericMessage({
-            "DeviceID": "3645c7ee-ca91-e579-e753-1d85af1fd08c",
-            "Timestamp": datetime.now().timestamp()
-        })
-        
-        mock_server.accept.side_effect = [
-            (mock_conn, b"raw_data"),
-            KeyboardInterrupt
-        ]
-        
-        with patch.object(module, 'create_anpr_message_from_bytes', return_value=message):
-            with patch.object(message, 'handle') as mock_handle:
-                with patch.object(message, 'to_bytes', return_value=b"processed"):
-                    with self.assertRaises(KeyboardInterrupt):
-                        module.main(self.settings, self.engine)
-                    
-                    mock_handle.assert_called_once()
-                    # Verify response is sent for GenericMessage
-                    mock_conn.send.assert_called_once_with(b"processed")
-                    mock_conn.close.assert_called()
-
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()

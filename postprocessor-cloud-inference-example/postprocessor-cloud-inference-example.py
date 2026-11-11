@@ -1,238 +1,205 @@
-import os
+"""
+Cloud Inference Postprocessor (v5 SDK)
+
+Crops every detected `face` out of the input frame, sends the crop to AWS
+Rekognition, and attaches the returned human-readable description to the object.
+
+Behavior-preserving port of the v4 example, with two changes forced by the v5
+wire format rather than chosen:
+
+* v4 moved a classified face into a *new* class named after the Rekognition
+  description. That description is free text, so the class set was unbounded,
+  and v5 requires every class in `msg.objects` to be pre-declared in the
+  registration JSON's `Objects: [{ID, Name}]`. The description is therefore
+  attached as a `description` attribute on the existing `face` object instead.
+* Consequently the classified face is no longer deleted from the `face` class
+  (v4 removed it once it had been re-homed under the description class).
+
+The frame arrives at the root `ImageData` key (gated by `ReceiveInputImage`)
+rather than through a separate image-header message plus a raw SHM read, and
+object boxes are normalized to [0,1], so they are scaled to pixels before the
+crop.
+"""
+
 import sys
-import socket
 import logging
-import logging.handlers
-import configparser
-from pprint import pformat
-from PIL import Image
-import msgpack
-import struct
 import numpy as np
+from PIL import Image
 from aws_utils import classify_faces, create_session
+import nxai_postprocessor_sdk
 
-# Add the nxai-utilities python utilities
-script_location = os.path.dirname(sys.argv[0])
-sys.path.append(os.path.join(script_location, "../nxai-utilities/python-utilities"))
-import nxai_communication_utils
+# ============================================================================
+# Configuration
+# ============================================================================
 
-CONFIG_FILE = os.path.join(script_location, "..", "etc", "plugin.cloud-inference.ini")
+logger = logging.getLogger(__name__)
 
-# Set up logging
-if os.path.exists(os.path.join(script_location, "..", "etc")):
-    LOG_FILE = os.path.join(script_location, "..", "etc", "plugin.cloud-inference.log")
-else:
-    LOG_FILE = os.path.join(script_location, "plugin.cloud-inference.log")
+PROCESSOR_NAME = "cloud-inference"
 
-# Initialize plugin and logging, script makes use of INFO and DEBUG levels
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - cloud inference - %(message)s",
-    filename=LOG_FILE,
-    filemode="w",
-)
+# Class whose objects are sent to Rekognition, and the attribute the returned
+# description is written to.
+FACE_CLASS = "face"
+DESCRIPTION_ATTRIBUTE = "description"
 
-# The name of the postprocessor.
-# This is used to match the definition of the postprocessor with routing.
-Postprocessor_Name = "Cloud-Inference-Postprocessor"
+# Classify at most this many faces per frame, to avoid affecting the FPS rate.
+MAX_FACES_PER_FRAME = 2
 
-# The socket this postprocessor will listen on.
-# This is always given as the first argument when the process is started
-# But it can be manually defined as well, as long as it is the same as the socket path in the runtime settings
-import tempfile
-Postprocessor_Socket_Path = os.path.join(tempfile.gettempdir(),"python-cloud-inference-postprocessor.sock")
+# Where the cropped face is written before being handed to Rekognition. Set from
+# the `image_path` Config key at startup; a launch-time path, not a live setting.
+image_path = None
 
-global shared_memory
-shared_memory = None
+# ============================================================================
+# Business Logic
+# ============================================================================
 
 
-def parse_image_from_shm(shm_key: int, width: int, height: int, channels: int):
-    global shared_memory
-    try:
-        if shared_memory is None:
-            shared_memory = nxai_communication_utils.SharedMemory(key=shm_key)
-        image_data = shared_memory.read()
-        image_size = width * height * channels
-        image_array = list(struct.unpack("B" * image_size, image_data))
-        image_array = np.array(image_array).reshape((height, width, channels)).astype("uint8")
-    except Exception as e:
-        logger.debug("Failed to parse image from shared memory: ", e)
-        return None
+def handle_message(
+    msg: nxai_postprocessor_sdk.ObjectsPostProcessorMessage,
+) -> nxai_postprocessor_sdk.ObjectsPostProcessorMessage:
+    """Classify the frame's faces and describe them.
 
-    return image_array
+    Args:
+        msg: Parsed ObjectsPostProcessorMessage from NXAI runtime, with
+            `image_data` populated (ReceiveInputImage is set in the JSON).
 
+    Returns:
+        The same message, with a `description` attribute set on each face that
+        Rekognition described, up to MAX_FACES_PER_FRAME per frame.
+    """
+    faces = msg.objects.get(FACE_CLASS, [])
+    if not faces:
+        return msg
 
-def config():
+    image = _image_from_frame(msg.image_data)
+    classified = 0
+    for face in faces:
+        cropped_image = image.crop(_pixel_box(face, image.width, image.height))
+        cropped_image.save(image_path)
 
-    global aws_access_key_id
-    global aws_secret_access_key
-    global region_name
-    global image_path
-
-    logger.info("Reading configuration from:" + CONFIG_FILE)
-
-    try:
-        configuration = configparser.ConfigParser()
-        configuration.read(CONFIG_FILE)
-
-        configured_log_level = configuration.get("common", "debug_level", fallback="INFO")
-        set_log_level(configured_log_level)
-
-        for section in configuration.sections():
-            logger.info("config section: " + section)
-            for key in configuration[section]:
-                logger.info("config key: " + key + " = " + configuration[section][key])
-
-        aws_access_key_id = configuration.get("cloud", "aws_access_key_id", fallback=False)
-        aws_secret_access_key = configuration.get("cloud", "aws_secret_access_key", fallback=False)
-        region_name = configuration.get("cloud", "region_name", fallback=False)
-        image_path = configuration.get(
-            "inference",
-            "image_path",
-            fallback="/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors/face.png",
-        )
-
-    except Exception as e:
-        logger.error(e, exc_info=True)
-
-    logger.debug("Read configuration done")
-
-
-def set_log_level(level):
-    try:
-        logger.setLevel(level)
-    except Exception as e:
-        logger.error(e, exc_info=True)
-
-
-def main():
-
-    global aws_access_key_id
-    global aws_secret_access_key
-    global region_name
-    global image_path
-
-    # Start socket listener to receive messages from NXAI runtime
-    server = nxai_communication_utils.SocketListener(Postprocessor_Socket_Path)
-    # Wait for messages in a loop
-    while True:
-        # Wait for input message from runtime
-        logger.debug("Waiting for input message")
-
-        try:
-            connection, input_message = server.accept()
-        except nxai_communication_utils.SocketTimeout:
-            # Request timed out. Continue waiting
+        logger.info(f"Classifying image {image_path}")
+        description = classify_faces(image_path, logger)
+        if description is None:
+            logger.info("No description for this face.")
             continue
 
-        # Since we're also expecting an image, receive the image header
-        try:
-            image_header = connection.receive()
-        except nxai_communication_utils.SocketTimeout:
-            # Did not receive image header
-            logger.debug("Did not receive image header. Are the settings correct?")
-            continue
-
-        # Parse input message
-        input_object = nxai_communication_utils.parseInferenceResults(input_message)
-        if isinstance(input_object, nxai_communication_utils.ExitSignal):
-            logger.info("Received exit signal.")
-            connection.close()
+        face.attributes[DESCRIPTION_ATTRIBUTE] = description
+        classified += 1
+        if classified >= MAX_FACES_PER_FRAME:
             break
 
-        image_header = msgpack.unpackb(image_header)
-        image_array = parse_image_from_shm(
-            image_header["SHMKEY"],
-            image_header["Width"],
-            image_header["Height"],
-            image_header["Channels"],
-        )
-        if image_array is None:
-            continue
+    logger.debug(f"Described {classified} of {len(faces)} '{FACE_CLASS}' object(s)")
+    return msg
 
-        image = Image.fromarray(image_array)
 
-        faces = np.array(input_object["BBoxes_xyxy"]["face"]).reshape(-1, 4)
+def run_message_loop(processor: nxai_postprocessor_sdk.ExternalPostprocessor) -> None:
+    """Serve messages until the engine sends a graceful EXIT signal.
 
-        faces_to_delete = []
-        for i, face in enumerate(faces):
-            path = image_path
-            x1, y1, x2, y2 = face
-            cropped_image = image.crop((x1, y1, x2, y2))
-            cropped_image.save(path)
+    `wait_for_message()` returns None both on a plain timeout and on an IPC EXIT
+    signal; only `processor.exit_requested` tells them apart. A loop that just
+    `continue`s on None regardless of that flag never returns, and the AI Manager
+    kills the process after its grace period instead of it exiting cleanly.
 
-            logger.info("Classifying image " + path)
+    The Rekognition call inside `handle_message` is a synchronous step of the loop
+    body, so no request is ever left in flight across the return: the frame that
+    made it completes before the next message is asked for.
 
-            description = classify_faces(path, logger)
-
-            if description is None:
-                logger.info("No description for this face.")
+    Args:
+        processor: An initialized ExternalPostprocessor.
+    """
+    while True:
+        logger.debug("Waiting for input message")
+        try:
+            message_bytes = processor.wait_for_message(timeout_ms=5000)
+            if message_bytes is None:
+                if processor.exit_requested:
+                    logger.info("Received graceful exit signal, shutting down")
+                    return
+                logger.debug("Timeout waiting for message")
                 continue
-
-            # Add the description to the object
-            if description not in input_object:
-                input_object["BBoxes_xyxy"][description] = face.tolist()
-            else:
-                input_object["BBoxes_xyxy"][description].extend(face.tolist())
-
-            faces_to_delete.append(i)
-
-            # FIXME: Run the classification for 2 faces max to avoid affecting FPS rate
-            if len(faces_to_delete) >= 2:
+            logger.debug(f"Received message ({len(message_bytes)} bytes)")
+            objects_message = processor.parse_objects_message(message_bytes)
+            if objects_message is None:
+                logger.error("Failed to parse message")
+                continue
+            processed_msg = handle_message(objects_message)
+            response_bytes = processor.write_objects_message(processed_msg)
+            if response_bytes is None:
+                logger.error("Failed to serialize message")
+                continue
+            if not processor.send_response(response_bytes):
+                logger.error("Failed to send response")
                 break
+            logger.debug("Response sent successfully")
+        except Exception as e:
+            logger.error(f"Error processing message: {e}", exc_info=True)
+            break
 
-        # Delete the faces that have been classified
-        faces = np.delete(faces, faces_to_delete, axis=0)
-        input_object["BBoxes_xyxy"]["face"] = faces.flatten().tolist()
 
-        formatted_packed_object = pformat(input_object)
-        logger.debug(f"Returning packed object:\n\n{formatted_packed_object}\n\n")
+# ============================================================================
+# Utilities
+# ============================================================================
 
-        # Write object back to string
-        output_message = nxai_communication_utils.writeInferenceResults(input_object)
 
-        # Send message back to runtime
-        connection.send(output_message)
-        connection.close()
+def _image_from_frame(image_data: nxai_postprocessor_sdk.ImageData) -> Image.Image:
+    """Rebuild a PIL image from the frame's raw bytes.
 
+    The engine delivers the frame as uint8 RGB, one byte per channel.
+    """
+    array = np.frombuffer(image_data.bytes, dtype=np.uint8)
+    if image_data.layout == nxai_postprocessor_sdk.ImageOrder.CHW:
+        array = array.reshape((_CHANNELS, image_data.height, image_data.width)).transpose(1, 2, 0)
+    else:
+        array = array.reshape((image_data.height, image_data.width, _CHANNELS))
+    return Image.fromarray(array)
+
+
+# RGB, as the v4 example's `Image.frombytes("RGB", ...)` also assumed.
+_CHANNELS = 3
+
+
+def _pixel_box(
+    obj: nxai_postprocessor_sdk.ObjectMetadata, image_width: int, image_height: int
+) -> tuple[int, int, int, int]:
+    """Scale a normalized xywh object box to a pixel xyxy crop box."""
+    x1 = round(obj.x * image_width)
+    y1 = round(obj.y * image_height)
+    x2 = round((obj.x + obj.width) * image_width)
+    y2 = round((obj.y + obj.height) * image_height)
+    return x1, y1, x2, y2
+
+
+# ============================================================================
+# Main Entry Point
+# ============================================================================
 
 if __name__ == "__main__":
-    ## initialize the logger
-    logger = logging.getLogger(__name__)
+    logger = nxai_postprocessor_sdk.setup_logging()
+    processor_config = nxai_postprocessor_sdk.load_config(sys.argv)
+    nxai_postprocessor_sdk.apply_config_logging(processor_config, logger)
+    logger.info(f"Initializing '{processor_config.get('ProcessorName', PROCESSOR_NAME)}' postprocessor")
+    logger.debug(f"Command-line arguments: {sys.argv}")
 
-    ## read configuration file if it's available
-    config()
+    image_path = processor_config.get("image_path")
+    if image_path is None:
+        logger.error("No 'image_path' in the processor Config; nowhere to write the cropped face")
+        sys.exit(1)
 
-    logger.info("Initializing cloud interference plugin")
-    logger.debug("Input parameters: " + str(sys.argv))
-
-    global rekognition_client
-
-    try:
-        rekognition_client = create_session(logger)
-    except Exception as e:
-        logger.error(e, exc_info=True)
-
-    if rekognition_client:
-        logger.debug("AWS Session started")
-    else:
+    if create_session(logger) is None:
         logger.error("AWS session failed")
-        exit()
+        sys.exit(1)
+    logger.info("AWS session started")
 
-    # Parse input arguments
-    if len(sys.argv) > 1:
-        Postprocessor_Socket_Path = sys.argv[1]
-
-    # Start program
+    processor = nxai_postprocessor_sdk.ExternalPostprocessor()
+    if not processor.initialize_from_args():
+        logger.error("Failed to initialize postprocessor from arguments")
+        sys.exit(1)
+    logger.info(f"Postprocessor '{processor.name}' initialized successfully")
+    logger.info("Waiting for messages from NXAI runtime...")
     try:
-        main()
-    except Exception as e:
-        logger.error(e, exc_info=True)
+        run_message_loop(processor)
     except KeyboardInterrupt:
         logger.info("Exited with keyboard interrupt")
-
-    try:
-        os.unlink(Postprocessor_Socket_Path)
-    except OSError:
-        if os.path.exists(Postprocessor_Socket_Path):
-            logger.error("Could not remove socket file: " + Postprocessor_Socket_Path)
+    except Exception as e:
+        logger.error(f"Fatal error: {e}", exc_info=True)
+    finally:
+        logger.info("Postprocessor shutdown")

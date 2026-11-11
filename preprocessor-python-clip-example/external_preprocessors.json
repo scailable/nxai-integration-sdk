@@ -1,0 +1,25 @@
+[
+    {
+        "Name": "CLIP-Text-Prompts",
+        "Command": "/path/to/build/preprocessor-python-clip-example/preprocessor-python-clip-example",
+        "Schedule": "TENSOR",
+        "LogFilepath": "/tmp/preprocess.clip-example.stdout.log",
+        "Config": {
+            "LogLevel": "DEBUG"
+        },
+        "UserSettings": [
+            {
+                "type": "Repeater",
+                "count": 5,
+                "startIndex": 1,
+                "template": {
+                    "type": "TextField",
+                    "name": "prompt#",
+                    "caption": "Prompt #",
+                    "description": "Text prompt # to score the frame against",
+                    "defaultValue": ""
+                }
+            }
+        ]
+    }
+]

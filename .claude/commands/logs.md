@@ -1,70 +1,55 @@
-Find and display the log file for a running post-processor.
+Find and display the log file for a processor.
 
 ## Arguments
 
-`$ARGUMENTS` — short name (e.g. `vehicle-counter`) or full processor name (e.g. `postprocessor-python-vehicle-counter`).
+`$ARGUMENTS` — a short name (e.g. `events-example`) or a full directory name (e.g. `postprocessor-python-events-example` or `preprocessor-python-image-example`). If the argument starts with neither `postprocessor-` nor `preprocessor-`, prepend `postprocessor-python-`. The C++ and cloud examples (`postprocessor-cpp-*`, `postprocessor-cloud-*`) need the full directory name.
 
 ## Background
 
-Post-processors write logs to a file named `plugin.<shortname>.log`. The location depends on how the processor was started:
+A v5 processor writes its logs to stdout and stderr. The AI Manager writes that output to the file named by the `LogFilepath` field of the processor's registration entry. There is no log file that the processor opens itself.
 
-- **Production** (started by the AI Manager): the binary lives in `.../postprocessors/`, so `../etc/` resolves to:
-  ```
-  <VMS_BASE>/mediaserver/var/nx_ai_manager/nxai_manager/etc/
-  ```
-  where `VMS_BASE` is `/opt/networkoptix-metavms` (NX Meta) or `/opt/networkoptix` (NX Witness).
-- **Dev mode** (started manually from the source directory): the fallback path puts the log in the same directory as the script, e.g. `postprocessor-python-<name>/plugin.<shortname>.log`.
-
-The short name embedded in the filename is not always predictable — e.g. `postprocessor-python-edgeimpulse-example` uses `plugin.cloud-edgeimpulse.log`. Read the `LOG_FILE` assignment in the processor's `.py` file to determine the exact name.
+The entry is in `external_postprocessors.json` (postprocessors) or `external_preprocessors.json` (preprocessors).
 
 ## Steps
 
-1. **Detect the active NX VMS installation** by running these checks in order, stopping at the first match:
+1. **Detect the active NX VMS installation.** Run these checks in order and stop at the first match:
    - `systemctl is-active networkoptix-metavms-mediaserver` → `VMS_BASE=/opt/networkoptix-metavms`
    - `systemctl is-active networkoptix-mediaserver` → `VMS_BASE=/opt/networkoptix`
    - `/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/` exists → use metavms
    - `/opt/networkoptix/mediaserver/var/nx_ai_manager/` exists → use witness
-   - Neither found → skip the production path search, check only dev-mode paths
+   - Neither found → skip the installed file and use only the colocated one.
 
-2. **Determine the short log name** by reading the `LOG_FILE` assignment in the processor's `.py` file. Extract the filename (e.g. `plugin.events.log`).
+   **Windows detection.** The platform is Windows when `$env:OS` is `Windows_NT` or `uname -s` starts with `MINGW` or `MSYS`. `VMS_BASE` is the mediaserver service profile. Check these directories in order and stop at the first with an `nx_ai_manager\` subdirectory:
+   - `C:\Windows\System32\config\systemprofile\AppData\Local\Network Optix\Network Optix MetaVMS Media Server` (NX Meta)
+   - `C:\Windows\System32\config\systemprofile\AppData\Local\Network Optix\Network Optix Media Server` (NX Witness)
+   - Neither found → skip the installed file and use only the colocated one.
 
-3. **Search for the log file** in order of likelihood:
+   There is no `mediaserver\var` level.
+
+2. **Find the registration file and the entry.** The kind comes from the name prefix. Search in this order:
+   - Installed: `<VMS_BASE>/mediaserver/var/nx_ai_manager/<postprocessors|preprocessors>/external_<postprocessors|preprocessors>.json` (on Windows `<VMS_BASE>\nx_ai_manager\<postprocessors|preprocessors>\external_<postprocessors|preprocessors>.json`)
+   - Colocated: `<processor-dir>/external_<postprocessors|preprocessors>.json` in the repo.
+
+   The file is a bare JSON array. Take the element whose `Command` ends with the processor directory name, with or without a `.exe` suffix, after a `/` or a `\` (for example `.../preprocessor-python-image-example`, or on Windows `C:/.../postprocessors/preprocessor-python-image-example.exe`). The `Name` field is a display name and often differs from the directory name. If no file has such an element, print that the processor is not registered and stop.
+
+3. **Read `LogFilepath`** from the entry.
+
+4. **If `LogFilepath` is missing**, print:
+   ```
+   ⚠️  The entry for <Name> has no LogFilepath. The processor's stdout and stderr are lost.
+       Add "LogFilepath": "/tmp/<postprocess|preprocess>.<short name>.stdout.log" to the entry and restart the AI Manager.
+   ```
+   On Windows, suggest `C:\Windows\Temp\<postprocess|preprocess>.<short name>.stdout.log`, because the service runs as LocalSystem and `/tmp` does not exist. Then go to step 6.
+
+5. **If `LogFilepath` is set**, show the last 50 lines of that file:
    ```shell
-   # Production path
-   <VMS_BASE>/mediaserver/var/nx_ai_manager/nxai_manager/etc/<logfile>
-
-   # Dev mode: script directory
-   postprocessor-python-<name>/<logfile>
-
-   # Dev mode: working directory fallback
-   ./<logfile>
+   tail -n 50 <LogFilepath>
    ```
+   On Windows, read the file with `Get-Content -Tail 50 -LiteralPath <LogFilepath>`. If the file does not exist, say that the processor has not run yet or the path is not writable. Suggest `tail -f <LogFilepath>` for live output (on Windows `Get-Content -Wait -Tail 50 -LiteralPath <LogFilepath>`).
 
-4. **If found**, print the last 50 lines and offer to tail it live:
+6. **Also check** the mediaserver's main log. Skip this step when step 1 found no VMS. The AI Manager writes its own lines there, with the tag `nx_ai_manager_plugin`. They include processor startup errors, for example `Failed to start external postprocessor <Name>`:
    ```shell
-   tail -n 50 <path>
+   <VMS_BASE>/mediaserver/var/log/main.log
    ```
-   For live tailing suggest the user run in their terminal:
-   ```shell
-   tail -f <path>
-   ```
-
-5. **If not found**, print:
-   ```
-   ⚠️  No log file found for postprocessor-python-<name>.
-
-   Expected filename: <logfile>
-   Searched:
-     <VMS_BASE>/.../nxai_manager/etc/<logfile>      (production)
-     postprocessor-python-<name>/<logfile>    (dev mode, script dir)
-
-   The processor may not have run yet, or it may have started with a
-   different working directory. Check the LOG_FILE variable in:
-     postprocessor-python-<name>/postprocessor-python-<name>.py
-   ```
-
-6. **Also check** for the AI Manager's own log, which captures processor startup errors:
-   ```shell
-   <VMS_BASE>/mediaserver/var/log/log_file.log
-   ```
-   Search it for lines containing the processor name and print any found.
+   On Windows the file is `<VMS_BASE>\log\main.log`.
+   Search it for lines that contain the entry's `Name` and print any found.
