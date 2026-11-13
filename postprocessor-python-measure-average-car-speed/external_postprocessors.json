@@ -1,0 +1,51 @@
+[
+    {
+        "Name": "Measure-Average-Car-Speed",
+        "Command": "/path/to/build/postprocessor-python-measure-average-car-speed/postprocessor-python-measure-average-car-speed",
+        "Schedule": "OBJECTS",
+        "ReceiveBinaryData": true,
+        "LogFilepath": "/tmp/postprocess.measure-average-car-speed.stdout.log",
+        "Config": {
+            "LogLevel": "DEBUG",
+            "ocr_worker_count": "2",
+            "ocr_output_name": "Identity:0",
+            "cache_ttl_sec": "300"
+        },
+        "UserSettings": [
+            {
+                "type": "TextField",
+                "name": "camera_1_id",
+                "caption": "Camera 1 device ID",
+                "description": "DeviceID (UUID) of the first camera on the measured route"
+            },
+            {
+                "type": "TextField",
+                "name": "camera_2_id",
+                "caption": "Camera 2 device ID",
+                "description": "DeviceID (UUID) of the second camera on the measured route"
+            },
+            {
+                "type": "DoubleSpinBox",
+                "name": "distance_between_cameras_m",
+                "caption": "Distance between cameras (m)",
+                "description": "Road distance in meters between camera 1 and camera 2",
+                "defaultValue": 100.0,
+                "minValue": 0.1
+            },
+            {
+                "type": "DoubleSpinBox",
+                "name": "second_appearance_timeout_sec",
+                "caption": "Second appearance timeout (s)",
+                "description": "How long to wait for the same plate on the other camera before giving up",
+                "defaultValue": 60.0,
+                "minValue": 0.1
+            }
+        ],
+        "Events": [
+            {
+                "ID": "speed.measurement",
+                "Name": "Average speed measured"
+            }
+        ]
+    }
+]

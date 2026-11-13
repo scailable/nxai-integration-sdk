@@ -1,0 +1,17 @@
+[
+    {
+        "Name": "postprocessor-cpp-objects-example",
+        "Command": "/path/to/build/postprocessor-cpp-objects-example/postprocessor-cpp-objects-example",
+        "Schedule": "OBJECTS",
+        "LogFilepath": "/tmp/postprocess.cpp-objects.stdout.log",
+        "Objects": [
+            {
+                "ID": "cpp_objects_example",
+                "Name": "C++ Objects Example"
+            }
+        ],
+        "Config": {
+            "LogLevel": "DEBUG"
+        }
+    }
+]

@@ -1,291 +1,92 @@
-Postprocessor Python Events Example
-============================
+# Postprocessor Python Events Example
 
-This example application provides an example on how to create a Python based postprocessor that can generate events which can be used in the Nx Mediaserver.
+A v5 post-processor that emits an `ex.example.event` event on every
+frame, describing how many objects of each class were detected.
 
-The postprocessor definition is read by the NxAI Plugin to gather all the events this external postprocessor can generate. These events will then appear in the list of Analytics Events the device can generate. You can then configure the Camera Rules to perform a wide array of functions when this event is triggered.
+## What it does
 
-# Postprocessors Control Flow
+`handle_message` builds a description string from `msg.objects` and appends
+exactly one `EventMetadata` to `msg.events` on every frame:
 
-The normal control flow of a postprocessor is to receive a MessagePack binary message representing the inference results from the NXAI AI Manager, and return the same or an altered version of the received MessagePack message.
+```python
+event = nxai_postprocessor_sdk.EventMetadata()
+event.type_id = "ex.example.event"
+event.description = description
+msg.events.append(event)
+```
 
-An external postprocessor can parse the incoming MessagePack message, do analysis, optionally alter it, and return it. The alterations made by an external postprocessor will be kept and sent to the Network Optix server to be represented as bounding boxes or events.
+The description lists the per-class object count, e.g.
+`"\nThere are 2 car's in the frame"`, or `"\nThere are no objects in the
+frame."` when nothing was detected.
 
-An external postprocessor is a standalone application which is expected to receive these MessagePack messages and return a MessagePack message with a compatible format. Instructions can be added to a configuration file to handle executing and terminating the application.
+Preserved from v4 (not a bug fix): building the description is order
+dependent on `msg.objects`' class iteration order. A class with zero
+detections that appears before the first class with a nonzero count has its
+partial "no objects" text fully discarded rather than appended to; classes
+encountered after the first nonzero-count class are appended normally
+regardless of their own count. See `test_postprocessor_python_events_example.py`
+for worked examples of both orderings.
 
-Only one external processor is started for all devices. This means that a single processor can combine data for multiple devices for deeper analysis.
+## Behavior change from v4
 
-# MessagePack schema
+- v4 set an event `Caption` field; v5 `EventMetadata` has no `Caption` — only
+  `type_id` and `description` are serialized.
+- v4 derived the per-class count as `len(coordinates) / 4` from flat xyxy
+  arrays; v5's `msg.objects[class_name]` is already one entry per detected
+  object, so the count is `len(class_objects)` directly. The displayed number
+  is unchanged.
 
-The incoming MessagePack message follows a specific schema. If the message is altered, the returned message must follow the same schema. In Json, this schema would look like:
+## Registration
+
+Add the processor to `external_postprocessors.json` (see the colocated
+`external_postprocessors.json` and `.claude/docs/external_postprocessors_json.md`):
 
 ```json
 {
-    "DeviceID": "<Device ID>",
-    "DeviceName": "<Device Name>",
-    "Timestamp": <Timestamp>,
-    "InputIndex": <Index>,
-    "Width": <Width>,
-    "Height": <Height>,
-    "BBoxes_xyxy": {
-        "<Class Name>": [<Float Coordinates>]
-        },
-    "ObjectsMetaData": {
-        <"Class Name">: {
-            "ObjectIDs": [
-                <16-byte UUID>,
-                <16-byte UUID>
-            ],
-            "AttributeKeys": [
-                [<Attribute Key>,<Attribute Key>],
-                [<Attribute Key>,<Attribute Key>]
-            ],
-            "AttributeValues": [
-                [<Attribute Value>,<Attribute Value>],
-                [<Attribute Value>,<Attribute Value>]
-            ]
+    "Name": "Events-Example",
+    "Command": "/path/to/build/postprocessor-python-events-example/postprocessor-python-events-example",
+    "Schedule": "OBJECTS",
+    "LogFilepath": "/tmp/postprocess.events-example.stdout.log",
+    "Config": {
+        "LogLevel": "DEBUG"
+    },
+    "Events": [
+        {
+            "ID": "ex.example.event",
+            "Name": "Example event"
         }
-    },
-    "Scores": {
-        <"Class Name"> : <Score>
-    },
-    "ExternalProcessorSettings": {}
-}
- ```
-
-Some fields depend on which model is assigned. If a model outputs bounding boxes, the `BBoxes_xyxy` field will be present. If a model outputs scores, the `Scores` field will be present.
-
-The image header message contains fields indicating information about the image dimensions and information to access this data:
-
-```json
-{
-    "Width": <Width>,
-    "Height": <Height>,
-    "Channels": <Channels>,
-    "SHMKEY": <SHM Key>
+    ]
 }
 ```
 
-A convenience example function is provided showing how to use this data to access the original tensor data in shared memory.
+Key points:
 
-# Requirements
+- `Schedule: "OBJECTS"` — the processor runs on inference-results messages.
+- `Config` delivers launch-time configuration: only `LogLevel`.
+- `Events` declares the `ex.example.event` id emitted every frame. The AI
+  Manager passes it into the DeviceAgent manifest verbatim, so the
+  emitted id is the same bare id — no `nx.nxai.` prefix, unlike object classes.
+- No `Objects`: the processor adds no new classes, it only reads existing
+  detections to build the event description.
 
-For this example to work, you can use any model.
+## Build, test, install
 
-# How to use
-
-## Download the integration SDK
-
-You probably have the integration SDK already if you're looking at this readme, the command to get the full integration SDK is as follows:
-
-```shell
-git clone https://github.com/scailable/sclbl-integration-sdk.git --recurse-submodules
-```
-
-If you have downloaded the sdk previously, you can also update to the latest version of the integration SDK while in the directory of the downloaded git repository.
+Build via the CMake tree:
 
 ```shell
-git pull --recurse-submodules
-```
-
-## Configuration of example postprocessor
-
-Create a [configuration file](plugin.example.ini.example) at `/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/etc/plugin.example.ini` and add some overrides for the configuration.
-
-This plugin only supports changing the debug level between DEBUG, INFO, WARNING, ERROR and CRITICAL
-
-For example:
-
-```ini
-[common]
-debug_level=DEBUG
-```
-
-## Use the interval based upload
-
-When the `auto_generator` is set to `True` images will be uploaded according to the value in `auto_generator_every_seconds`
-
-## Use the confidence threshold based upload
-
-When the `auto_generator` is set to `False` images will be uploaded according to the value in `p_value`
-
-## Preparation of dependencies
-
-Install the needed dependencies
-
-```shell
-sudo apt install cmake
-sudo apt install g++
-sudo apt install python3-pip
-sudo apt install patchelf
-```
-
-Change into the directory created for the project if you're not already there.
-
-```shell
-cd nxai-integration-sdk/
-```
-
-Prepare the *build* directory in the project directory, and switch to the build directory.
-
-```shell
-mkdir -p build
-cd build
-```
-
-Set up a python virtual environment in the newly created build directory (on recent ubuntu servers this is required).
-
-```shell
-python3 -m venv integrationsdk
-source integrationsdk/bin/activate
-```
-
-## (optionally) Remove other postprocessors for compilation
-
-Edit the `CMakelist.txt` to disable all but the external postprocessor.
-
-```shell
-nano ../CMakeLists.txt
-```
-
-It should look similar to this
-
-```shell
-cmake_minimum_required(VERSION 3.10.2)
-
-project(sclbl-integration-examples)
-
-# Add Scailable C Utilities for all subprojects
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/sclbl-utilities)
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/sclbl-utilities/include)
-
-# Add Events Postprocessor Python project
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/postprocessor-python-events-example)
-
-# Add installation option
-install(TARGETS
-    DESTINATION /opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors/
-)
-install(PROGRAMS
-    ${CMAKE_CURRENT_BINARY_DIR}/postprocessor-python-events-example/postprocessor-python-events-example
-    DESTINATION /opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors/
-)
-```
-
-## Compile the postprocessor
-
-Build the postprocessor, while in the created *build* directory. This may take a while, depending on the speed of your system.
-
-```shell
+mkdir -p build && cd build
 cmake ..
-make
+cmake --build . --target postprocessor-python-events-example
+cmake --install . --component postprocessor-python-events-example
 ```
 
-## Install the postprocessor
-
-Once compiled, copy the executable to an accessible directory.
-
-A convenience directory within the AI Manager installation is created for this purpose at `/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors`.
-
-The application and settings files you add must be readable and executable by the NX AI AI Manager. This can be achieved by running:
-
-```
-sudo chmod -R 777 /opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors
-```
-
-Install the postprocessor automatically with the cmake command, also from within the *build* directory.
+Run the colocated unit tests:
 
 ```shell
-cmake --build . --target install
+cd postprocessor-python-events-example
+PYTHONPATH=../nxai-utilities python -m unittest test_postprocessor_python_events_example -v
 ```
 
-## Defining the postprocessor
+## Licence
 
-Create a configuration file at
-```
-/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors/external_postprocessors.json
-```
-for Linux, or
-```
-C:\Windows\System32\config\systemprofile\AppData\Local\Network Optix\Network Optix MetaVMS Media Server\nx_ai_manager\nxai_manager\postprocessors\external_postprocessors.json
-```
-for Windows, and add the details of your postprocessor to the root object of that file. For example: 
-
-``` json
-{
-    "externalPostprocessors": [
-        {
-            "Name":"Example-Events-Postprocessor",
-            "Command":"/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors/postprocessor-python-events-example",
-            "SocketPath":"/tmp/python-events-example-postprocessor.sock",
-            "ReceiveInputTensor": false,
-            "Events": [
-                {
-                    "ID":"ex.example.event",
-                    "Name":"Example Event"
-                }
-            ]
-        }
-    ]
-}
-```
-For Linux, and
-```json
-{
-    "externalPostprocessors": [
-        {
-            "Name":"Example-Events-Postprocessor",
-            "Command":"C:\\Windows\\System32\\config\\systemprofile\\AppData\\Local\\Network Optix\\Network Optix MetaVMS Media Server\\nx_ai_manager\\nxai_manager\\postprocessors\\postprocessor-python-events-example.exe",
-            "SocketPath":"C:\\Windows\\Temp\\python-events-postprocessor.sock",
-            "ReceiveInputTensor": false,
-            "Events": [
-                {
-                    "ID":"ex.example.event",
-                    "Name":"Example Event"
-                }
-            ]
-            
-        }
-    ]
-}
-```
-For Windows.
-
-This tells the AI Manager about the postprocessor:
-- **Name** gives the postprocesor a name so it can be selected later
-- **Command** defines how to start the postprocessor
-- **SocketPath** tells the AI Manager where to send data to so the external postprocessor will receive it
-- **ReceiveInputTensor** tells the AI Manager if this postprocessor expects information to access the raw input tensor data
-- **Events** defines a list of possible events this plugin can generate. If an event is not listed here, it will not show up in the Nx Client Analytics Events.
-
-The socket path is always given as the first command line argument when the application is started. It is therefore best practice for the external postprocessor application to read its socket path from here, instead of defining the data twice.
-
-## Restarting the server
-
-Finally, to (re)load your new postprocessor, make sure to restart the NX Server with:
-
-```shell
-sudo service networkoptix-metavms-mediaserver restart
-```
-
-You also want to make sure the postprocessor can be used by the NX AI Manager (this is the mostly same command as earlier)
-
-```shell
-sudo chmod -R a+x /opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors/
-```
-
-## Selecting to the postprocessor
-
-If the postprocessor is defined correctly, its name should appear in the list of postprocessors in the NxAI Pipelines Settings. If it is selected in the pipelines settings then the Edge AI Runtime will send data to the postprocessor and wait for its output.
-
-## Output logging
-
-There is an output log where the uploads can be tracked in real time from the server.
-
-```shell
-tail -f /opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/etc/plugin.events.example.log
-```
-
-# Licence
-
-Copyright 2025, Network Optix, All rights reserved.
+Copyright 2026, Network Optix, All rights reserved.

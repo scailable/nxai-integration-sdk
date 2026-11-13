@@ -1,300 +1,298 @@
-import os
-import sys
-import socket
-import logging
-import logging.handlers
+"""
+Edge Impulse Image Uploader Postprocessor (v5 SDK)
+
+Uploads frames to an Edge Impulse project as training samples, either on a timer
+(`auto_generator`) or whenever the frame holds a detection the model was unsure
+about (`p_value`). Fire-and-forget: the registration JSON sets `"NoResponse":
+true`, so nothing is ever sent back.
+
+Behavior-preserving port of the v4 example, with the changes the v5 wire format
+forces rather than chooses:
+
+* v4 ran on `Schedule: TENSOR` and hand-unpacked the model's output tensor with
+  `struct` to reach every detection's score. A v5 TENSOR-schedule message carries
+  no `ImageData`, and this processor needs the score *and* the frame it uploads,
+  so it runs on `Schedule: OBJECTS` with `ReceiveInputImage: true` instead. The
+  score is read from the decoded objects' `confidence`, which is
+  bit-for-bit the same value the tensor row carried.
+* The frame arrives at the root `ImageData` key rather than through a separate
+  image-header message plus a raw shared-memory read.
+
+One accepted consequence: the score now arrives via the tracker rather than raw
+from the model, so a detection on a not-yet-warmed-up first frame may be missed.
+"""
+
 import configparser
 import io
+import logging
+import os
+import sys
 import time
-from pprint import pformat
-import msgpack
-import struct
-from math import prod
 from datetime import datetime
+
+import numpy as np
 from PIL import Image
+
 import edgeimpulse
+import nxai_postprocessor_sdk
+
+# ============================================================================
+# Configuration
+# ============================================================================
+
+logger = logging.getLogger(__name__)
+
+PROCESSOR_NAME = "edgeimpulse"
 
 script_location = os.path.dirname(sys.argv[0])
-CONFIG_FILE = os.path.join(script_location, "..", "etc", "plugin.cloud-edgeimpulse.ini")
+CONFIG_FILE = os.path.join(script_location, "..", "etc", "plugin.edgeimpulse.ini")
 
-LOG_FILE = os.path.join(script_location, "..", "etc", "plugin.cloud-edgeimpulse.log")
+# Add your own project level Edge Impulse API key to CONFIG_FILE, under
+# [edgeimpulse] api_key. The processor refuses to start while it is unset.
+DEFAULT_EDGE_IMPULSE_API_KEY = "ei_your_key_here"
 
-# Add your own project level Edge Impulse API key
-# Please use the CONFIG_FILE to set [edgeimpulse][api_key] to your edge impulse api key
-default_edge_impulse_api_key = "ei_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+# Settings read from CONFIG_FILE at startup, with the v4 defaults.
+edge_impulse_api_key = DEFAULT_EDGE_IMPULSE_API_KEY
+p_value = 0.4
+samples_buffer_flush_size = 20
+auto_generator = False
+auto_generator_every_seconds = 1
 
-# We keep a counter to generate unique filenames.
-samples_counter: int = 0
+# When the timer path last queued a sample. Armed in __main__ so the first sample
+# is due one interval into the run, as the v4 loop's start_time was.
+auto_generator_last_sample_at = 0.0
 
-# The buffer with samples to batch.
-samples_buffer: list = []
+# Frames queued as JPEG bytes, uploaded in one batch.
+samples_buffer = []
 
-# Returning data to the AI Manager is not needed for this postprocessor.
-# See also "NoResponse": true value in external_postprocessors.json / README.md
-return_data = False
+# Counter behind the unique sample filenames.
+samples_counter = 0
 
-# Initialize plugin and logging, script makes use of INFO and DEBUG levels
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - edge impulse - %(message)s",
-    filename=LOG_FILE,
-    filemode="w",
-)
-
-# Add the nxai-utilities python utilities
-sys.path.append(os.path.join(script_location, "../nxai-utilities/python-utilities"))
-import nxai_communication_utils
-
-# The name of the postprocessor.
-# This is used to match the definition of the postprocessor with routing.
-Postprocessor_Name = "Python-EdgeImpulse-Postprocessor"
-
-# The socket this postprocessor will listen on.
-# This is always given as the first argument when the process is started
-# But it can be manually defined as well, as long as it is the same as the socket path in the runtime settings
-import tempfile
-Postprocessor_Socket_Path = os.path.join(tempfile.gettempdir(),"python-edgeimpulse-postprocessor.sock")
+# ============================================================================
+# Business Logic
+# ============================================================================
 
 
-def send_samples_buffer():
-    # This function sends the buffered samples to an Edge Impulse instance for data processing.
-    # It generates a unique filename for each sample and adds it to a new list of samples while
-    # updating the global counter.
-    # It then uploads all these samples to the Edge Impulse. The function also times the duration of
-    # the upload and prints this time along with the number of samples uploaded. If the sample buffer
-    # was already empty, the function just prints that there were no samples to upload.
-    # At the end, it empties the sample buffer.
+def handle_message(msg: nxai_postprocessor_sdk.ObjectsPostProcessorMessage) -> None:
+    """Queue this frame as a training sample if it is one worth having.
+
+    Which frames those are depends on the mode: on the timer path
+    (`auto_generator`) every frame that falls due, otherwise every frame holding
+    a detection the model was unsure about.
+
+    Returns nothing: this processor never responds (`NoResponse`).
+
+    Args:
+        msg: Parsed ObjectsPostProcessorMessage from NXAI runtime, with
+            `image_data` populated (ReceiveInputImage is set in the JSON).
+    """
+    if not (_sample_is_due() if auto_generator else _has_uncertain_detection(msg)):
+        logger.debug("skipping sample")
+        return
+
+    logger.debug("uploading sample")
+    samples_buffer.append(_jpeg_from_frame(msg.image_data))
+    # Logged after the conversion, not before it: this is the line an end-to-end
+    # test asserts on, and it has to be false when the frame never
+    # became a JPEG.
+    logger.info(f"Queued sample: {len(samples_buffer)} pending upload")
+    if len(samples_buffer) >= samples_buffer_flush_size:
+        send_samples_buffer()
+
+
+def read_config(config_file: str) -> None:
+    """Override the settings above from `config_file`, the processor's ini.
+
+    This processor's settings live in an ini file rather than in the registration
+    entry's `Config` block, as they did in v4; a missing or partial file leaves
+    the defaults in place.
+    """
+    global edge_impulse_api_key, p_value, samples_buffer_flush_size
+    global auto_generator, auto_generator_every_seconds
+
+    logger.info(f"Reading configuration from: {config_file}")
+    configuration = configparser.ConfigParser()
+    configuration.read(config_file)
+    for section in configuration.sections():
+        for key in configuration[section]:
+            logger.info(f"config key: {section}.{key} = {configuration[section][key]}")
+
+    # Falls back to whatever the entry's Config LogLevel already set, so an ini
+    # without a debug_level does not quietly undo it.
+    logger.setLevel(configuration.get("common", "debug_level", fallback=logger.level))
+    edge_impulse_api_key = configuration.get(
+        "edgeimpulse", "api_key", fallback=DEFAULT_EDGE_IMPULSE_API_KEY)
+    auto_generator = configuration.getboolean(
+        "edgeimpulse", "auto_generator", fallback=auto_generator)
+    auto_generator_every_seconds = configuration.getint(
+        "edgeimpulse", "auto_generator_every_seconds", fallback=auto_generator_every_seconds)
+    samples_buffer_flush_size = configuration.getint(
+        "edgeimpulse", "samples_buffer_flush_size", fallback=samples_buffer_flush_size)
+    p_value = configuration.getfloat("edgeimpulse", "p_value", fallback=p_value)
+
+
+def api_key_is_set() -> bool:
+    """Whether the ini replaced the placeholder key; the processor refuses to start
+    until it has."""
+    return edge_impulse_api_key != DEFAULT_EDGE_IMPULSE_API_KEY
+
+
+def send_samples_buffer() -> None:
+    """Upload every queued frame to Edge Impulse as one batch, and empty the queue.
+
+    Each sample gets a filename unique within the run: two frames can share a
+    second, so the counter, not the timestamp, is what separates them.
+    """
     global samples_buffer, samples_counter
-    if len(samples_buffer) > 0:
-        logging.info("Sending {c} samples to Edge Impulse...".format(c=len(samples_buffer)))
-        start_at = time.perf_counter()
-        samples = []
-        for contents in samples_buffer:
-            samples_counter += 1
-            logging.info("Create sample" + str(samples_counter))
-            filename = "{dt}C{c}.jpg".format(dt=datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), c=samples_counter)
-            output = io.BytesIO(contents)
-            sample = edgeimpulse.experimental.data.Sample(
-                filename=filename,
-                data=output,
-                metadata={
-                    "date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                },
-            )
-            samples.append(sample)
+    if not samples_buffer:
+        logger.info(f"No samples to send to Edge Impulse. Total {samples_counter}")
+        return
 
-        logging.info("Done creating samples, starting upload...")
-        response = edgeimpulse.experimental.data.upload_samples(samples)
-        logging.info("Done upload")
-
-        # Check to make sure there were no failures
-        if (len(response.fails)) != 0:
-            logging.info("Could not upload files")
-
-        end_at = time.perf_counter()
-        logging.info(
-            "Send {c} samples in {d:0.1f}sec to Edge Impulse. Total {t}".format(
-                c=len(samples_buffer),
-                d=end_at - start_at,
-                t=samples_counter,
-            )
+    logger.info(f"Sending {len(samples_buffer)} samples to Edge Impulse...")
+    start_at = time.perf_counter()
+    samples = []
+    for contents in samples_buffer:
+        samples_counter += 1
+        logger.info(f"Create sample {samples_counter}")
+        filename = "{dt}C{c}.jpg".format(
+            dt=datetime.now().strftime("%Y-%m-%dT%H:%M:%S"), c=samples_counter)
+        sample = edgeimpulse.experimental.data.Sample(
+            filename=filename,
+            data=io.BytesIO(contents),
+            metadata={"date": datetime.now().strftime("%Y-%m-%d %H:%M:%S")},
         )
-        logging.info("Send a total of {t} samples to Edge Impulse".format(t=samples_counter))
+        samples.append(sample)
 
-        samples_buffer = []
-    else:
-        logging.info("No samples to send to Edge Impulse. Total {t}".format(t=samples_counter))
+    logger.info("Done creating samples, starting upload...")
+    response = edgeimpulse.experimental.data.upload_samples(samples)
+    logger.info("Done upload")
+    if len(response.fails) != 0:
+        logger.info("Could not upload files")
 
-
-def config():
-
-    global edge_impulse_api_key
-    global default_edge_impulse_api_key
-    global auto_generator
-    global auto_generator_every_seconds
-    global samples_buffer_flush_size
-    global p_value
-
-    logger.info("Reading configuration from:" + CONFIG_FILE)
-
-    try:
-        configuration = configparser.ConfigParser()
-        configuration.read(CONFIG_FILE)
-
-        configured_log_level = configuration.get("common", "debug_level", fallback="INFO")
-        set_log_level(configured_log_level)
-
-        for section in configuration.sections():
-            logger.info("config section: " + section)
-            for key in configuration[section]:
-                logger.info("config key: " + key + " = " + configuration[section][key])
-
-        # Override default values from config
-        edge_impulse_api_key = configuration.get("edgeimpulse", "api_key", fallback=default_edge_impulse_api_key)
-
-        logger.info("new edge_impulse_api_key: " + edge_impulse_api_key)
-
-        auto_generator = configuration.get("edgeimpulse", "auto_generator", fallback=False)
-        auto_generator_every_seconds = int(configuration.get("edgeimpulse", "auto_generator_every_seconds", fallback=1))
-        samples_buffer_flush_size = int(configuration.get("edgeimpulse", "samples_buffer_flush_size", fallback=20))
-        p_value = float(configuration.get("edgeimpulse", "p_value", fallback=0.4))
-
-    except Exception as e:
-        logger.error(e, exc_info=True)
-
-    logger.debug("Read configuration done")
+    logger.info(
+        "Send {c} samples in {d:0.1f}sec to Edge Impulse. Total {t}".format(
+            c=len(samples_buffer), d=time.perf_counter() - start_at, t=samples_counter))
+    samples_buffer = []
 
 
-def set_log_level(level):
-    try:
-        logger.setLevel(level)
-    except Exception as e:
-        logger.error(e, exc_info=True)
+def run_message_loop(processor: nxai_postprocessor_sdk.ExternalPostprocessor) -> None:
+    """Serve messages until the engine sends a graceful EXIT signal.
 
+    `wait_for_message()` returns None both on a plain timeout and on an IPC EXIT
+    signal; only `processor.exit_requested` tells them apart. A loop that just
+    `continue`s on None regardless of that flag never returns, and the AI Manager
+    kills the process after its grace period instead of it exiting cleanly.
 
-def main():
-
-    global samples_buffer
-    global samples_buffer_flush_size
-    global samples_counter
-    global p_value
-    global auto_generator
-    global auto_generator_every_seconds
-    global edge_impulse_api_key
-
-    # Add your own project level Edge Impulse API key
-    edgeimpulse.API_KEY = edge_impulse_api_key
-
-    # Start socket listener to receive messages from NXAI runtime
-    try:
-        os.remove(Postprocessor_Socket_Path)
-    except OSError:
-        pass
-    server = nxai_communication_utils.SocketListener(Postprocessor_Socket_Path)
-
-    # Get the current time at the start
-    start_time = time.time()
-
-    # Wait for messages in a loop
-    counter = 0
+    Args:
+        processor: An initialized ExternalPostprocessor.
+    """
     while True:
-
-        upload_sample = False
-
-        logger.debug("Wait for message " + str(counter))
-        # Wait for input message from runtime
+        logger.debug("Waiting for input message")
         try:
-            connection, input_message = server.accept()
-            image_header = connection.receive()
-        except nxai_communication_utils.SocketTimeout:
-            # Request timed out. Continue waiting
-            continue
+            message_bytes = processor.wait_for_message(timeout_ms=5000)
+            if message_bytes is None:
+                if processor.exit_requested:
+                    logger.info("Received graceful exit signal, shutting down")
+                    return
+                logger.debug("Timeout waiting for message")
+                continue
+            logger.debug(f"Received message ({len(message_bytes)} bytes)")
+            objects_message = processor.parse_objects_message(message_bytes)
+            if objects_message is None:
+                logger.error("Failed to parse message")
+                continue
+            # Fire-and-forget: perform the side effect and end the loop here.
+            # No write_objects_message/send_response call - the AI Manager is
+            # configured with "NoResponse": true, and the NoResponse path has
+            # no return channel at all.
+            handle_message(objects_message)
+        except Exception as e:
+            logger.error(f"Error processing message: {e}", exc_info=True)
+            break
 
-        counter = counter + 1
 
-        logger.debug("Message " + str(counter) + "received")
+# ============================================================================
+# Utilities
+# ============================================================================
 
-        # Parse input message
-        parsed_response = msgpack.unpackb(input_message)
 
-        # Read Output types, shapes and sizes
-        output_data_types = parsed_response.get("OutputDataTypes")  # 1 for float32 and 3 for int8
-        output_shapes = parsed_response.get("OutputShapes")
-        output_sizes = [prod(output_shapes[i]) for i in range(len(output_shapes))]
+def _sample_is_due() -> bool:
+    """Whether `auto_generator_every_seconds` have passed since the last timed
+    sample, re-arming the interval when they have."""
+    global auto_generator_last_sample_at
+    now = time.time()
+    if now - auto_generator_last_sample_at < auto_generator_every_seconds:
+        return False
+    auto_generator_last_sample_at = now
+    logger.info(f"Add timed sample every {auto_generator_every_seconds} seconds to upload queue")
+    return True
 
-        # Unpack Output values
-        for i, key in enumerate(parsed_response["Outputs"]):
-            value = parsed_response["Outputs"][key]
-            if output_data_types[i] == 1:
-                parsed_response["Outputs"][key] = list(struct.unpack("f" * output_sizes[i], value))
-            elif output_data_types[i] == 3:
-                parsed_response["Outputs"][key] = list(struct.unpack("b" * output_sizes[i], value))
 
-        if logging.getLogger().isEnabledFor(logging.DEBUG):
-            logger.debug("Message " + str(counter) + " parsed")
-            # Use pformat to format the deep object
-            formatted_object = pformat(parsed_response)
-            logger.debug(f"Parsed response:\n\n{formatted_object}\n\n")
+def _has_uncertain_detection(msg: nxai_postprocessor_sdk.ObjectsPostProcessorMessage) -> bool:
+    """Whether any detection scored below `p_value` -- the samples worth training
+    on are the ones the model was unsure about, so the comparison is `<`."""
+    for objects in msg.objects.values():
+        for obj in objects:
+            if obj.confidence < p_value:
+                logger.debug("Parsed value: %.8f", obj.confidence)
+                return True
+    return False
 
-        current_time = time.time()
 
-        # Check if auto_generator is True and 60 seconds have passed
-        if auto_generator and current_time - start_time >= auto_generator_every_seconds:
+def _jpeg_from_frame(image_data: nxai_postprocessor_sdk.ImageData) -> bytes:
+    """Encode the frame as a JPEG, ready to be handed to Edge Impulse.
 
-            start_time = current_time
-            logging.info("Add timed sample every " + str(auto_generator_every_seconds) + " seconds number " + str(counter) + " to upload queue")
-            upload_sample = True
+    The engine delivers the frame as uint8 RGB, one byte per channel.
+    """
+    array = np.frombuffer(image_data.bytes, dtype=np.uint8)
+    if image_data.layout == nxai_postprocessor_sdk.ImageOrder.CHW:
+        array = array.reshape((_CHANNELS, image_data.height, image_data.width)).transpose(1, 2, 0)
+    else:
+        array = array.reshape((image_data.height, image_data.width, _CHANNELS))
+    with Image.fromarray(array) as image:
+        with io.BytesIO() as output:
+            image.save(output, format="JPEG")
+            return output.getvalue()
 
-        elif not auto_generator:
 
-            # Retrieve the bounding box values
-            bbox_values = list(parsed_response["Outputs"].values())[0]
+# RGB, as the v4 example's `Image.frombytes("RGB", ...)` also assumed.
+_CHANNELS = 3
 
-            # Number of elements in each bounding box entry (assuming format: x1, y1, x2, y2, score, class)
-            num_elements_per_entry = 6
 
-            # Extract every 5th out of six values
-            parsed_values = [bbox_values[i] for i in range(4, len(bbox_values), num_elements_per_entry)]
-
-            # Check if any of the values are below p_value and earmark result for retrieval
-            for value in parsed_values:
-                if value < p_value:
-                    logger.debug("Parsed value: %.8f", value)
-                    upload_sample = True
-
-        if upload_sample:
-            logger.debug("uploading sample")
-            # Parse image information
-            image_header = msgpack.unpackb(image_header)
-
-            # Read image
-            shared_memory = nxai_communication_utils.SharedMemory(key=image_header["SHMKey"])
-            image_data = shared_memory.read()
-            with Image.frombytes("RGB", (image_header["Width"], image_header["Height"]), image_data) as image:
-                with io.BytesIO() as output:
-                    image.save(output, format="JPEG")
-                    output.seek(0)
-                    samples_buffer.append(output.getvalue())
-            if len(samples_buffer) >= samples_buffer_flush_size:
-                send_samples_buffer()
-        else:
-            logger.debug("skipping sample")
-
-        if return_data:
-            # Create msgpack formatted message
-            data_types = parsed_response.get("OutputDataTypes")
-            for key in parsed_response["Outputs"]:
-                value = parsed_response["Outputs"][key]
-                if data_types[0] == 1:
-                    parsed_response["Outputs"][key] = struct.pack("f" * len(value), *value)
-                elif data_types[0] == 3:
-                    parsed_response["Outputs"][key] = struct.pack("b" * len(value), *value)
-            message_bytes = msgpack.packb(parsed_response)
-
-            # Send message back to runtime
-            connection.send(message_bytes)
-
+# ============================================================================
+# Main Entry Point
+# ============================================================================
 
 if __name__ == "__main__":
-    logger = logging.getLogger(__name__)
+    logger = nxai_postprocessor_sdk.setup_logging()
+    processor_config = nxai_postprocessor_sdk.load_config(sys.argv)
+    nxai_postprocessor_sdk.apply_config_logging(processor_config, logger)
+    logger.info(f"Initializing '{processor_config.get('ProcessorName', PROCESSOR_NAME)}' postprocessor")
+    logger.debug(f"Command-line arguments: {sys.argv}")
 
-    config()
+    # The default sits next to the installed binary, whose directory differs per
+    # product; the Config key lets a caller that cannot know that directory --
+    # an automated test -- point at a fixed path instead.
+    config_file = processor_config.get("config_file", CONFIG_FILE)
+    read_config(config_file)
+    auto_generator_last_sample_at = time.time()
 
-    logger.info("Initializing example plugin")
-    logger.debug("Input parameters: " + str(sys.argv))
+    if not api_key_is_set():
+        logger.error(f"Edge Impulse API key is not set in {config_file}")
+        sys.exit(1)
+    edgeimpulse.API_KEY = edge_impulse_api_key
 
-    if edge_impulse_api_key == default_edge_impulse_api_key:
-        logger.error("Edge Impulse Key is not set yet", exc_info=True)
-        exit()
-    else:
-        logger.debug("Edge Impulse Key: " + edge_impulse_api_key)
-
-    # Parse input arguments
-    if len(sys.argv) > 1:
-        Postprocessor_Socket_Path = sys.argv[1]
-
-    # Start program
+    processor = nxai_postprocessor_sdk.ExternalPostprocessor()
+    if not processor.initialize_from_args():
+        logger.error("Failed to initialize postprocessor from arguments")
+        sys.exit(1)
+    logger.info(f"Postprocessor '{processor.name}' initialized successfully")
+    logger.info("Waiting for messages from NXAI runtime...")
     try:
-        main()
+        run_message_loop(processor)
+    except KeyboardInterrupt:
+        logger.info("Exited with keyboard interrupt")
     except Exception as e:
-        logger.error(e, exc_info=True)
+        logger.error(f"Fatal error: {e}", exc_info=True)
+    finally:
+        logger.info("Postprocessor shutdown")

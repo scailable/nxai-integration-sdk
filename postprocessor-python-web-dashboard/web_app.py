@@ -6,7 +6,7 @@ Receives detection data from the postprocessor via POST /api/ingest,
 persists everything in SQLite, and serves an interactive dashboard at
 http://localhost:<port>/.
 """
-import os, sys, logging, logging.handlers, configparser, json, signal, random, sqlite3, time, argparse
+import os, sys, logging, logging.handlers, json, signal, random, sqlite3, time, argparse
 from datetime import datetime
 from threading import Thread, Lock, Event
 from collections import deque, defaultdict
@@ -16,7 +16,6 @@ from urllib.parse import urlparse, parse_qs
 script_location = os.path.dirname(os.path.realpath(sys.argv[0]))
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-CONFIG_FILE = os.path.join(script_location, "..", "etc", "plugin.web-dashboard.ini")
 _etc        = os.path.join(script_location, "..", "etc")
 _log_dir    = _etc if os.path.exists(_etc) else script_location
 LOG_FILE    = os.path.join(_log_dir, "plugin.web-dashboard-app.log")
@@ -34,6 +33,7 @@ DEFAULT_PORT          = 8111
 DEFAULT_TIMELINE_CAP  = 50_000   # per-second buckets (~13.9 h at 1 fps)
 DEFAULT_SCATTER_CAP   = 5_000    # reservoir samples per scatter plot
 DEFAULT_FLUSH_SECS    = 10       # how often to flush meta/sampler state to DB
+FLUSH_JOIN_SECS       = 5        # how long shutdown waits for the final flush
 
 shutdown_event = Event()
 web_server     = None
@@ -146,8 +146,6 @@ class DetectionStore:
             self.total_objects        = int(meta('total_objects', 0))
             self.cumulative_per_class = defaultdict(int, json.loads(meta('cumulative_per_class', '{}')))
             self.current_per_class    = {}
-            self.frame_width          = int(meta('frame_width', 0))
-            self.frame_height         = int(meta('frame_height', 0))
 
             raw_start = meta('start_time')
             self.start_time = datetime.fromisoformat(raw_start) if raw_start else datetime.now()
@@ -186,7 +184,7 @@ class DetectionStore:
 
     # ── Write ──────────────────────────────────────────────────────────────────
 
-    def update(self, ts, counts, sizes, positions, width=0, height=0):
+    def update(self, ts, counts, sizes, positions):
         """
         Process one detection frame.
         ts       — Unix float seconds (from the inference message Timestamp).
@@ -206,10 +204,6 @@ class DetectionStore:
 
             for cls, cnt in counts.items():
                 self.cumulative_per_class[cls] += cnt
-
-            if width > 0 and height > 0:
-                self.frame_width  = width
-                self.frame_height = height
 
             # Accumulate into per-second buckets keyed by the inference timestamp
             sec = int(ts)
@@ -279,8 +273,6 @@ class DetectionStore:
                 ('frame_count',          str(self.frame_count)),
                 ('total_objects',        str(self.total_objects)),
                 ('cumulative_per_class', json.dumps(dict(self.cumulative_per_class))),
-                ('frame_width',          str(self.frame_width)),
-                ('frame_height',         str(self.frame_height)),
                 ('size_sampler_n',       str(self._sizes.n)),
                 ('position_sampler_n',   str(self._positions.n)),
             ]
@@ -338,8 +330,6 @@ class DetectionStore:
             return {
                 'sizes':     self._sizes.get(),
                 'positions': self._positions.get(),
-                'fw':        self.frame_width,
-                'fh':        self.frame_height,
             }
 
     def get_distribution(self):
@@ -403,8 +393,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     counts    = data.get('counts', {}),
                     sizes     = data.get('sizes', []),
                     positions = data.get('positions', []),
-                    width     = int(data.get('width', 0)),
-                    height    = int(data.get('height', 0)),
                 )
                 self._json({'ok': True})
             except (KeyError, ValueError, json.JSONDecodeError) as e:
@@ -478,7 +466,9 @@ def start_flush_thread(interval_secs):
             store.flush_meta()
         except Exception as e:
             logger.error("Final flush error: %s", e, exc_info=True)
-    Thread(target=run, daemon=True, name="flush").start()
+    thread = Thread(target=run, daemon=True, name="flush")
+    thread.start()
+    return thread
 
 
 # ── Server lifecycle ───────────────────────────────────────────────────────────
@@ -490,6 +480,20 @@ def signal_handler(signum, _):
         web_server.shutdown()
 
 
+def wait_for_shutdown(flush_thread, join_timeout=FLUSH_JOIN_SECS):
+    """
+    Block until a signal sets the shutdown event, then give the flush thread
+    time to complete its final flush. Without this the thread is a daemon and
+    the interpreter can exit while that flush is still in progress, losing the
+    meta/sampler state it was about to write.
+    """
+    shutdown_event.wait()
+    flush_thread.join(timeout=join_timeout)
+    if flush_thread.is_alive():
+        logger.warning("Flush thread still running after %ss; final flush may be incomplete",
+                       join_timeout)
+
+
 def set_log_level(level):
     try:
         logger.setLevel(getattr(logging, level.upper()))
@@ -497,21 +501,20 @@ def set_log_level(level):
         logger.error("Log level error: %s", e, exc_info=True)
 
 
-def config():
-    logger.info("Reading config from: %s", CONFIG_FILE)
-    port, tc, sc, db_path = DEFAULT_PORT, DEFAULT_TIMELINE_CAP, DEFAULT_SCATTER_CAP, DEFAULT_DB
-    try:
-        cfg = configparser.ConfigParser()
-        cfg.read(CONFIG_FILE)
-        set_log_level(cfg.get('common', 'log_level', fallback='INFO'))
-        if 'web_server' in cfg:
-            port    = cfg.getint('web_server', 'port',              fallback=DEFAULT_PORT)
-            tc      = cfg.getint('web_server', 'timeline_capacity', fallback=DEFAULT_TIMELINE_CAP)
-            sc      = cfg.getint('web_server', 'scatter_capacity',  fallback=DEFAULT_SCATTER_CAP)
-            db_path = cfg.get   ('web_server', 'db_path',           fallback=DEFAULT_DB)
-    except Exception as e:
-        logger.error("Config error: %s", e, exc_info=True)
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description="Web Dashboard — NX AI Manager monitoring app")
+    parser.add_argument('--port',      type=int, default=DEFAULT_PORT, help=f"HTTP port (default: {DEFAULT_PORT})")
+    parser.add_argument('--db',        metavar='PATH', default=DEFAULT_DB, help="SQLite database path")
+    parser.add_argument('--log-level', metavar='LEVEL', default='INFO', help="Log level: DEBUG|INFO|WARNING|ERROR")
+    parser.add_argument('--timeline-capacity', type=int, default=DEFAULT_TIMELINE_CAP,
+                        help=f"Per-second timeline buckets kept (default: {DEFAULT_TIMELINE_CAP})")
+    parser.add_argument('--scatter-capacity', type=int, default=DEFAULT_SCATTER_CAP,
+                        help=f"Reservoir samples per scatter plot (default: {DEFAULT_SCATTER_CAP})")
+    return parser.parse_args(argv)
 
+
+def config(args):
+    port, tc, sc = args.port, args.timeline_capacity, args.scatter_capacity
     if not (1 <= port <= 65535):
         logger.warning("Invalid port %d, using default %d", port, DEFAULT_PORT)
         port = DEFAULT_PORT
@@ -521,7 +524,7 @@ def config():
     if not (1 <= sc <= 1_000_000):
         logger.warning("Invalid scatter_capacity %d, using default %d", sc, DEFAULT_SCATTER_CAP)
         sc = DEFAULT_SCATTER_CAP
-    return port, tc, sc, db_path
+    return port, tc, sc, args.db
 
 
 # ── Dashboard HTML ─────────────────────────────────────────────────────────────
@@ -762,12 +765,12 @@ function initCharts() {
 
   sizeChart = new Chart(document.getElementById('sizeChart'), {
     type: 'scatter', data: { datasets: [] },
-    options: scatterOpts('Width (px)', 'Height (px)', false)
+    options: scatterOpts('Width (normalized)', 'Height (normalized)', false)
   });
 
   posChart = new Chart(document.getElementById('posChart'), {
     type: 'scatter', data: { datasets: [] },
-    options: scatterOpts('Center X (px)', 'Center Y (px)', true)
+    options: scatterOpts('Center X (normalized)', 'Center Y (normalized)', true)
   });
 }
 
@@ -837,10 +840,6 @@ function updateScatter(data) {
     pointRadius: 3,
     pointHoverRadius: 5,
   }));
-  if (data.fw > 0 && data.fh > 0) {
-    posChart.options.scales.x.max = data.fw;
-    posChart.options.scales.y.max = data.fh;
-  }
   posChart.update('none');
   restoreHidden(posChart, psHidden);
 }
@@ -924,26 +923,18 @@ setInterval(fetchSlow, 5000);
 # ── Entry point ────────────────────────────────────────────────────────────────
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Web Dashboard — NX AI Manager monitoring app")
-    parser.add_argument('--port',      type=int, help=f"HTTP port (default: {DEFAULT_PORT})")
-    parser.add_argument('--db',        metavar='PATH', help="SQLite database path")
-    parser.add_argument('--log-level', metavar='LEVEL', help="Log level: DEBUG|INFO|WARNING|ERROR")
-    args = parser.parse_args()
+    args = parse_args()
 
     logger = logging.getLogger(__name__)
-    port, tc, sc, db_path = config()
-
-    # CLI args override config file
-    if args.port:      port     = args.port
-    if args.db:        db_path  = args.db
-    if args.log_level: set_log_level(args.log_level)
+    set_log_level(args.log_level)
+    port, tc, sc, db_path = config(args)
 
     store = DetectionStore(db_path, tc, sc)
 
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT,  signal_handler)
 
-    start_flush_thread(DEFAULT_FLUSH_SECS)
+    flush_thread = start_flush_thread(DEFAULT_FLUSH_SECS)
 
     try:
         start_web_server(port)
@@ -952,7 +943,5 @@ if __name__ == '__main__':
         sys.exit(1)
 
     logger.info("Web Dashboard App running — http://localhost:%d  db=%s", port, db_path)
-    shutdown_event.wait()
-
-    shutdown_event.set()  # ensure flush thread exits if not already set
+    wait_for_shutdown(flush_thread)
     logger.info("Web Dashboard App stopped.")

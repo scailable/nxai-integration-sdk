@@ -1,0 +1,17 @@
+[
+    {
+        "Name": "postprocessor-python-example",
+        "Command": "/path/to/build/postprocessor-python-example/postprocessor-python-example",
+        "Schedule": "OBJECTS",
+        "LogFilepath": "/tmp/postprocess.python-example.stdout.log",
+        "Objects": [
+            {
+                "ID": "python_example",
+                "Name": "Python Example"
+            }
+        ],
+        "Config": {
+            "LogLevel": "DEBUG"
+        }
+    }
+]

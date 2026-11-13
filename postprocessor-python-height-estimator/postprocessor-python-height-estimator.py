@@ -1,273 +1,198 @@
-#!/usr/bin/env python3
 """
-Person Height Estimator Postprocessor
+Person Height Estimator Postprocessor (v5 SDK)
 
-For cameras where people walk left-to-right (bounding box height ≈ person height),
-this postprocessor:
-  - Estimates every detected person's height in meters from their bounding box.
-  - Attaches the estimated height as a "Height" attribute on each person object.
-  - Fires an event when any person's height exceeds the configured threshold.
+Estimates every detected person's height from their bounding box and attaches it
+as a "Height" attribute, then fires the 'person.height.exceeded' event
+when any person is taller than `max_height_cm`. Calibration is a live
+UserSettings control, read fresh from the message every frame,
+falling back to the hardcoded defaults when the engine forwards no settings.
 
-User-configurable settings (via NX Cloud Pipelines UI):
-  - pixels_per_meter : how many pixels correspond to 1 metre in this camera view.
-  - max_height_cm    : height threshold in centimetres; exceeding it fires an event.
+The emitted event id is 'person.height.exceeded', exactly as registered in
+external_postprocessors.json, with no 'nx.nxai.' prefix.
+
+Behavior change from v4:
+- Height is computed from the normalized bbox height: height_m =
+  obj.height / frame_fraction_per_meter. The v4 pixel formula
+  ((y2 - y1) / pixels_per_meter) is removed — v5 bboxes are frame-relative, so
+  no ReceiveInputImage / pixel coordinates are needed. The calibration knob is
+  renamed pixels_per_meter -> frame_fraction_per_meter accordingly.
+- v4 read calibration from per-frame ExternalProcessorSettings; v5 reads it
+  from a live UserSettings control, not from launch-time Config args.
+- v4 emitted a Caption field on the event; v5 EventMetadata carries only
+  type_id + description (Caption dropped: the v5 wire codec has no Caption field).
 """
 
-import os
 import sys
 import logging
-import configparser
-import signal
-from threading import Event
-from pprint import pformat
+import nxai_postprocessor_sdk
 
-script_location = os.path.dirname(sys.argv[0])
-sys.path.append(os.path.join(script_location, "../nxai-utilities/python-utilities"))
-import nxai_communication_utils
+# ============================================================================
+# Configuration
+# ============================================================================
 
+logger = logging.getLogger(__name__)
 
-CONFIG_FILE = os.path.join(script_location, "..", "etc", "plugin.height-estimator.ini")
+PROCESSOR_NAME = "height-estimator"
+DEFAULT_FRAME_FRACTION_PER_METER = 0.25
+DEFAULT_MAX_HEIGHT_CM = 250  # 2.50 m
 
-if os.path.exists(os.path.join(script_location, "..", "etc")):
-    LOG_FILE = os.path.join(script_location, "..", "etc", "plugin.height-estimator.log")
-else:
-    LOG_FILE = os.path.join(script_location, "plugin.height-estimator.log")
-
-logging.basicConfig(
-    format="%(asctime)s - %(levelname)s - height-estimator - %(message)s",
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler(filename=LOG_FILE, mode="w"),
-    ]
-)
-
-Postprocessor_Name = "External - Python-Height-Estimator-Postprocessor"
-
-import tempfile
-Postprocessor_Socket_Path = os.path.join(
-    tempfile.gettempdir(), "python-height-estimator-postprocessor.sock"
-)
-
-DEFAULT_PIXELS_PER_METER = 100
-DEFAULT_MAX_HEIGHT_CM    = 250    # 2.50 m
-
-shutdown_event = Event()
+# ============================================================================
+# Business Logic
+# ============================================================================
 
 
-# ── Configuration ─────────────────────────────────────────────────────────────
+def handle_message(
+    msg: nxai_postprocessor_sdk.ObjectsPostProcessorMessage,
+) -> nxai_postprocessor_sdk.ObjectsPostProcessorMessage:
+    """Tag every person with an estimated Height and fire on over-limit persons.
 
-def config():
-    logger.info("Reading configuration from: %s", CONFIG_FILE)
-    try:
-        cfg = configparser.ConfigParser()
-        cfg.read(CONFIG_FILE)
-        set_log_level(cfg.get("common", "log_level", fallback="INFO"))
-        for section in cfg.sections():
-            for key, value in cfg[section].items():
-                logger.info("config [%s] %s = %s", section, key, value)
-    except Exception as e:
-        logger.error(e, exc_info=True)
-
-
-def set_log_level(level):
-    try:
-        logger.setLevel(getattr(logging, level.upper()))
-    except Exception as e:
-        logger.error(e, exc_info=True)
-
-
-def get_settings(input_object):
-    """Extract pixels_per_meter and max_height_m from ExternalProcessorSettings."""
-    pixels_per_meter = DEFAULT_PIXELS_PER_METER
-    max_height_m     = DEFAULT_MAX_HEIGHT_CM / 100.0
-
-    settings = input_object.get("ExternalProcessorSettings", {})
-    if not settings:
-        logger.warning("No ExternalProcessorSettings found, using defaults.")
-        return pixels_per_meter, max_height_m
-
-    try:
-        pixels_per_meter = int(settings.get(
-            "externalprocessor.pixels_per_meter", DEFAULT_PIXELS_PER_METER
-        ))
-        max_height_cm = int(settings.get(
-            "externalprocessor.max_height_cm", DEFAULT_MAX_HEIGHT_CM
-        ))
-        max_height_m = max_height_cm / 100.0
-    except (ValueError, TypeError) as e:
-        logger.warning("Invalid settings value: %s. Using defaults.", e)
-
-    return pixels_per_meter, max_height_m
-
-
-# ── Processing ────────────────────────────────────────────────────────────────
-
-def find_person_class(input_object):
-    """Return the person class key from BBoxes_xyxy (case-insensitive)."""
-    for cls in input_object.get("BBoxes_xyxy", {}):
-        if cls.lower() == "person":
-            return cls
-    return None
-
-
-def add_height_attributes(input_object, pixels_per_meter):
-    """
-    Compute and attach an estimated height attribute to every detected person.
-
-    The attribute is added to ObjectsMetaData so NX displays it on each
-    tracked object in the UI.
+    Args:
+        msg: Parsed ObjectsPostProcessorMessage from NXAI runtime.
 
     Returns:
-        list[float]: Estimated height in metres for each detected person,
-                     in the same order as the bounding boxes.
+        The same message with a "Height" attribute on each person and, when any
+        person exceeds the limit, a 'person.height.exceeded' event
+        appended.
     """
-    person_class = find_person_class(input_object)
-    if person_class is None:
-        return []
+    frame_fraction_per_meter = float(
+        msg.user_settings.get(
+            "frame_fraction_per_meter", DEFAULT_FRAME_FRACTION_PER_METER
+        )
+    )
+    max_height_cm = int(msg.user_settings.get("max_height_cm", DEFAULT_MAX_HEIGHT_CM))
+    heights = add_height_attributes(msg, frame_fraction_per_meter)
+    max_height_m = max_height_cm / 100.0
 
-    bboxes = input_object["BBoxes_xyxy"][person_class]
-    n = len(bboxes) // 4
-    if n == 0:
-        return []
+    logger.debug(f"Person heights (m): {[round(h, 2) for h in heights]}")
 
-    # Ensure ObjectsMetaData and the person entry exist
-    if "ObjectsMetaData" not in input_object:
-        input_object["ObjectsMetaData"] = {}
+    exceeding = sorted((h for h in heights if h > max_height_m), reverse=True)
+    if exceeding:
+        description = _format_description(exceeding, len(heights), max_height_m)
+        # NOTE: v5 EventMetadata carries only type_id + description; the v4
+        # Caption field is dropped — it does not exist in the v5 wire codec.
+        event = nxai_postprocessor_sdk.EventMetadata()
+        event.type_id = "person.height.exceeded"
+        event.description = description
+        msg.events.append(event)
+        logger.info(f"Height event fired: {description}")
 
-    ometa = input_object["ObjectsMetaData"]
-    if person_class not in ometa:
-        ometa[person_class] = {
-            "ObjectIDs":      ["" for _ in range(n)],
-            "AttributeKeys":  [[] for _ in range(n)],
-            "AttributeValues":[[] for _ in range(n)],
-        }
+    return msg
 
-    meta = ometa[person_class]
 
-    # Guard against mismatched array lengths (e.g. stale metadata)
-    for field in ("AttributeKeys", "AttributeValues"):
-        if not isinstance(meta.get(field), list) or len(meta[field]) != n:
-            meta[field] = [[] for _ in range(n)]
+# ============================================================================
+# Helpers
+# ============================================================================
 
+
+def add_height_attributes(
+    msg: nxai_postprocessor_sdk.ObjectsPostProcessorMessage,
+    frame_fraction_per_meter: float,
+) -> list:
+    """Attach a "Height" attribute to every detected person.
+
+    Args:
+        msg: Parsed ObjectsPostProcessorMessage.
+        frame_fraction_per_meter: Fraction of the frame height spanning 1 metre.
+
+    Returns:
+        Estimated height in metres for each detected person.
+    """
     heights = []
-    for i in range(n):
-        y1 = bboxes[i * 4 + 1]
-        y2 = bboxes[i * 4 + 3]
-        height_m = abs(y2 - y1) / pixels_per_meter
+    for obj in _person_objects(msg):
+        height_m = obj.height / frame_fraction_per_meter
+        obj.attributes["Height"] = f"{height_m:.2f} m"
         heights.append(height_m)
-
-        meta["AttributeKeys"][i].append("Height")
-        meta["AttributeValues"][i].append(f"{height_m:.2f} m")
-
     return heights
 
 
-def build_event(heights, max_height_m):
+def run_message_loop(processor: nxai_postprocessor_sdk.ExternalPostprocessor) -> None:
+    """Serve messages until the engine sends a graceful EXIT signal.
+
+    `wait_for_message()` returns None both on a plain timeout and on an IPC EXIT
+    signal; only `processor.exit_requested` tells them apart. A loop that just
+    `continue`s on None regardless of that flag never returns, and the AI Manager
+    kills the process after its grace period instead of it exiting cleanly.
+
+    Args:
+        processor: An initialized ExternalPostprocessor.
     """
-    Return an event dict if any height exceeds max_height_m, else None.
-
-    The description summarises how many persons exceeded and by how much.
-    """
-    exceeding = sorted(
-        [h for h in heights if h > max_height_m],
-        reverse=True
-    )
-    if not exceeding:
-        return None
-
-    tallest   = exceeding[0]
-    threshold = max_height_m
-    count     = len(exceeding)
-    total     = len(heights)
-
-    description = (
-        f"{count} of {total} detected person(s) exceed the height limit of "
-        f"{threshold:.2f} m. "
-        f"Tallest: {tallest:.2f} m."
-    )
-
-    return {
-        "ID":          "person.height.exceeded",
-        "Caption":     "Person Height Exceeded",
-        "Description": description,
-    }
-
-
-# ── Main loop ─────────────────────────────────────────────────────────────────
-
-def signal_handler(signum, _frame):
-    logger.info("Signal %s received, shutting down.", signal.Signals(signum).name)
-    shutdown_event.set()
-
-
-def main():
-    signal.signal(signal.SIGTERM, signal_handler)
-    signal.signal(signal.SIGINT,  signal_handler)
-
-    server = nxai_communication_utils.SocketListener(Postprocessor_Socket_Path)
-
-    while not shutdown_event.is_set():
+    while True:
         logger.debug("Waiting for input message")
-
         try:
-            connection, input_message = server.accept()
-        except nxai_communication_utils.SocketTimeout:
-            continue
-        except nxai_communication_utils.SocketError as e:
-            logger.warning("Socket error: %s", e)
-            continue
-
-        input_object = nxai_communication_utils.parseInferenceResults(input_message)
-        if isinstance(input_object, nxai_communication_utils.ExitSignal):
-            logger.info("Exit signal received.")
-            connection.close()
+            message_bytes = processor.wait_for_message(timeout_ms=5000)
+            if message_bytes is None:
+                if processor.exit_requested:
+                    logger.info("Received graceful exit signal, shutting down")
+                    return
+                logger.debug("Timeout waiting for message")
+                continue
+            logger.debug(f"Received message ({len(message_bytes)} bytes)")
+            objects_message = processor.parse_objects_message(message_bytes)
+            if objects_message is None:
+                logger.error("Failed to parse message")
+                continue
+            processed_msg = handle_message(objects_message)
+            response_bytes = processor.write_objects_message(processed_msg)
+            if response_bytes is None:
+                logger.error("Failed to serialize message")
+                continue
+            if not processor.send_response(response_bytes):
+                logger.error("Failed to send response")
+                break
+            logger.debug("Response sent successfully")
+        except Exception as e:
+            logger.error(f"Error processing message: {e}", exc_info=True)
             break
 
-        if logger.level == logging.DEBUG:
-            logger.debug("Unpacked:\n%s", pformat(input_object))
 
-        pixels_per_meter, max_height_m = get_settings(input_object)
+# ============================================================================
+# Main Entry Point
+# ============================================================================
 
-        # Always add height attributes to all detected persons
-        heights = add_height_attributes(input_object, pixels_per_meter)
-        logger.debug("Person heights (m): %s", [round(h, 2) for h in heights])
+def _person_objects(msg: nxai_postprocessor_sdk.ObjectsPostProcessorMessage) -> list:
+    """Return every object whose class name is "person" (case-insensitive)."""
+    persons = []
+    for class_name, objects in msg.objects.items():
+        if class_name.lower() == "person":
+            persons.extend(objects)
+    return persons
 
-        # Fire an event only when someone exceeds the threshold
-        event = build_event(heights, max_height_m)
-        if event:
-            input_object.setdefault("Events", []).append(event)
-            logger.info("Height event fired: %s", event["Description"])
 
-        output_message = nxai_communication_utils.writeInferenceResults(input_object)
-        connection.send(output_message)
-        connection.close()
+def _format_description(exceeding: list, total: int, max_height_m: float) -> str:
+    """Build a human-readable event description.
 
-    logger.info("Main loop exited.")
+    Args:
+        exceeding: Heights (m) above the limit, descending.
+        total: Number of detected persons.
+        max_height_m: The configured limit in metres.
+
+    Returns:
+        Description string naming the count, limit, and tallest person.
+    """
+    return (
+        f"{len(exceeding)} of {total} detected person(s) exceed the height limit "
+        f"of {max_height_m:.2f} m. Tallest: {exceeding[0]:.2f} m."
+    )
 
 
 if __name__ == "__main__":
-    logger = logging.getLogger(__name__)
-    config()
+    logger = nxai_postprocessor_sdk.setup_logging()
+    processor_config = nxai_postprocessor_sdk.load_config(sys.argv)
+    nxai_postprocessor_sdk.apply_config_logging(processor_config, logger)
+    logger.info(f"Initializing '{processor_config.get('ProcessorName', PROCESSOR_NAME)}' postprocessor")
+    logger.debug(f"Command-line arguments: {sys.argv}")
 
-    logger.info("Initializing Person Height Estimator Postprocessor")
-    logger.debug("Arguments: %s", sys.argv)
-
-    if len(sys.argv) > 1:
-        Postprocessor_Socket_Path = sys.argv[1]
-
-    logger.info("Socket: %s", Postprocessor_Socket_Path)
-    logger.info("Defaults — pixels/m: %d, max height: %.2f m",
-                DEFAULT_PIXELS_PER_METER, DEFAULT_MAX_HEIGHT_CM / 100.0)
-
+    processor = nxai_postprocessor_sdk.ExternalPostprocessor()
+    if not processor.initialize_from_args():
+        logger.error("Failed to initialize postprocessor from arguments")
+        sys.exit(1)
+    logger.info(f"Postprocessor '{processor.name}' initialized successfully")
+    logger.info("Waiting for messages from NXAI runtime...")
     try:
-        main()
-    except Exception as e:
-        logger.error(e, exc_info=True)
+        run_message_loop(processor)
     except KeyboardInterrupt:
         logger.info("Exited with keyboard interrupt")
-
-    try:
-        os.unlink(Postprocessor_Socket_Path)
-    except OSError:
-        if os.path.exists(Postprocessor_Socket_Path):
-            logger.error("Could not remove socket: %s", Postprocessor_Socket_Path)
+    except Exception as e:
+        logger.error(f"Fatal error: {e}", exc_info=True)
+    finally:
+        logger.info("Postprocessor shutdown")

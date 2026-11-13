@@ -3,7 +3,6 @@ ANPR OCR message (CCT model).
 """
 
 import logging
-import numpy as np
 from message_processing_utils.general.ocr.messages import OcrMessage
 
 
@@ -13,9 +12,9 @@ logger = logging.getLogger(__name__)
 class CctOcrMessage(OcrMessage):
     """OCR message for CCT model (NxM logits)."""
 
-    def __init__(self, message: dict, expected_logits_shape=(9, 37)):
+    def __init__(self, sdk_message, raw_tensors=None, expected_logits_shape=(9, 37)):
         self.expected_logits_shape = expected_logits_shape  # (N characters, M classes)
-        super().__init__(message)
+        super().__init__(sdk_message, raw_tensors)
 
     def decode_ocr_logits(self, engine, output_name):
         """
@@ -33,20 +32,10 @@ class CctOcrMessage(OcrMessage):
             ocr_logits = None
         elif binary_logits.size != expected_size:
             logger.warning(
-                "BinaryOutputs %s size %d does not match expected %s",
+                "Tensors %s size %d does not match expected %s",
                 output_name, binary_logits.size, self.expected_logits_shape
             )
+            ocr_logits = None
         else:
             ocr_logits = binary_logits.reshape(self.expected_logits_shape)
-        if ocr_logits is None and self.inference_data is not None:
-            logger.info("InferenceData type: %s", type(self.inference_data))
-            logger.info(
-                "InferenceData shape: %s", getattr(self.inference_data, 'shape', 'no shape')
-            )
-            if isinstance(self.inference_data, list):
-                ocr_logits = np.array(self.inference_data)
-            elif hasattr(self.inference_data, 'shape'):
-                ocr_logits = np.array(self.inference_data)
-            else:
-                logger.warning("Unexpected InferenceData format: %s", self.inference_data)
         return ocr_logits

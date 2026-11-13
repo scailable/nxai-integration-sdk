@@ -1,18 +1,19 @@
-Postprocessor Python Web Dashboard
-===================================
+# Postprocessor Python Web Dashboard
 
-Real-time object detection monitoring split into two independent components:
+A v5 post-processor that forwards real-time detection data to a companion web
+app for visualization, while passing the objects message back to the AI Manager
+**unmodified**. Two independent components:
 
 | Component | File | Role |
 |-----------|------|------|
-| **Postprocessor** | `postprocessor-python-web-dashboard.py` | Compiled binary; receives inference results from NX AI Manager, forwards them to the web app |
+| **Postprocessor** | `postprocessor-python-web-dashboard.py` | Compiled binary; receives inference results, POSTs per-frame counts and per-object size/position to the web app |
 | **Web App** | `web_app.py` | Plain Python script; stores detection data in SQLite, serves a dashboard at `http://localhost:8111` |
 
 ## Architecture
 
 ```
 NX AI Manager
-    │  Unix socket (MessagePack)
+    │  shared memory (MessagePack)
     ▼
 Postprocessor  (Nuitka-compiled binary)
     │  HTTP POST /api/ingest  (JSON)
@@ -23,72 +24,91 @@ Web App  (web_app.py)
 Browser Dashboard  http://localhost:8111
 ```
 
-# Requirements
+## What it does
 
-Any model that outputs bounding boxes. No additional Python packages required at runtime beyond the standard library.
+`handle_message` derives the web-app payload and POSTs it as a fire-and-forget
+side effect, then returns the message untouched:
 
-# Configuration
-
-Copy the [INI example](plugin.web-dashboard.ini.example) to:
-```
-/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/etc/plugin.web-dashboard.ini
-```
-
-Both components read the same INI file. Key settings:
-
-| Section | Key | Default | Description |
-|---------|-----|---------|-------------|
-| `web_app` | `url` | `http://localhost:8111` | URL the postprocessor POSTs detection frames to |
-| `web_server` | `port` | `8111` | Port the web app listens on |
-| `web_server` | `timeline_capacity` | `50000` | Per-second timeline buckets to keep |
-| `web_server` | `scatter_capacity` | `5000` | Reservoir sample size per scatter plot |
-
-# How to build
-
-Only the postprocessor binary is compiled; `web_app.py` runs directly with Python.
-
-```shell
-mkdir -p build && cd build
-python3 -m venv integrationsdk && source integrationsdk/bin/activate
-cmake ..
-cmake --build . --target postprocessor-python-web-dashboard
+```python
+counts = count_objects(msg)                 # {class_name: len(msg.objects[cls])}
+sizes, positions = extract_bbox_data(msg)   # from each ObjectMetadata bbox
+post_to_webapp(webapp_url, {"ts": msg.timestamp, "counts": counts,
+                            "sizes": sizes, "positions": positions})
+return msg                                  # forwarded unmodified
 ```
 
-# How to install
+`extract_bbox_data` reads the normalized `ObjectMetadata` bbox:
 
-```shell
-cmake --install . --component postprocessor-python-web-dashboard
+```python
+size = (round(obj.width, 4), round(obj.height, 4))
+pos  = (round(obj.x + obj.width / 2, 4), round(obj.y + obj.height / 2, 4))
 ```
 
-This installs the postprocessor binary and `web_app.py` to the postprocessors directory.
+Adding the dashboard to a pipeline never changes downstream results: no
+objects, attributes, or events are added.
 
-# Registration
+## Behavior change from v4
 
-Add to `external_postprocessors.json`:
+- **Size/position come from the normalized bbox**: v5 bounding boxes are
+  frame-relative `[0,1]` (`ObjectMetadata.x/y/width/height`), not pixel `xyxy`,
+  so `extract_bbox_data` derives `size = (width, height)` and
+  `pos = (x + width/2, y + height/2)`, rounded to 4 decimals (normalized
+  coordinates need the precision).
+- **Frame pixel dimensions are no longer sent**: the v5 objects message does not
+  carry the frame `Width`/`Height`, so the `width`/`height` fields are dropped
+  from the web-app payload (codec-forced).
+- **The web-app URL is a launch-time `Config` arg** (`--webapp_url`), not an INI
+  setting.
+
+## Registration
+
+Add the processor to `external_postprocessors.json` (see the colocated
+`external_postprocessors.json` and `.claude/docs/external_postprocessors_json.md`):
 
 ```json
 {
-    "externalPostprocessors": [
-        {
-            "Name": "External - Web Dashboard",
-            "Command": "/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors/postprocessor-python-web-dashboard",
-            "SocketPath": "/tmp/python-web-dashboard-postprocessor.sock",
-            "ReceiveInputTensor": false
-        }
-    ]
+    "Name": "Web-Dashboard",
+    "Command": "/path/to/postprocessor-python-web-dashboard",
+    "Schedule": "OBJECTS",
+    "LogFilepath": "/tmp/postprocess.web-dashboard.stdout.log",
+    "Config": {
+        "LogLevel": "DEBUG",
+        "webapp_url": "http://localhost:8111"
+    }
 }
 ```
 
-Restart the NX Server, then start the web app separately:
+Key points:
+
+- `Schedule: "OBJECTS"` — the processor runs on inference-results messages.
+- `Config` delivers the launch-time `webapp_url` the processor POSTs frames to.
+- No `Objects` or `Events`: the processor forwards the message unmodified and
+  declares nothing.
+
+## Build, test, install
+
+Only the postprocessor binary is compiled; `web_app.py` runs directly with
+Python.
 
 ```shell
-sudo service networkoptix-metavms-mediaserver restart
-python3 /opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors/web_app.py
+mkdir -p build && cd build
+cmake ..
+cmake --build . --target postprocessor-python-web-dashboard
+cmake --install . --component postprocessor-python-web-dashboard
 ```
 
-The dashboard is then available at `http://localhost:8111`.
+The install step copies both the postprocessor binary and `web_app.py` to the
+postprocessors directory.
 
-# Running the web app
+Run the colocated unit tests — `test_postprocessor_python_web_dashboard` for the
+post-processor and `test_web_app` for the web app's shutdown path:
+
+```shell
+cd postprocessor-python-web-dashboard
+PYTHONPATH=../nxai-utilities python -m unittest discover -p 'test_*.py' -v
+```
+
+## Running the web app
 
 ```shell
 # With defaults
@@ -96,36 +116,38 @@ python3 web_app.py
 
 # Override port or database path
 python3 web_app.py --port 9000 --db /path/to/data.db
+
+# Tune retention
+python3 web_app.py --timeline-capacity 100000 --scatter-capacity 10000
 ```
 
-The web app restores all previously collected data from SQLite on startup, so it can be restarted independently of the postprocessor without data loss.
+All settings are command-line flags; the web app reads no configuration file.
 
-# Logs
+| Flag | Default | Meaning |
+|------|---------|---------|
+| `--port` | 8111 | HTTP port |
+| `--db` | `plugin.web-dashboard.db` in `../etc` relative to the script if that directory exists, otherwise next to the script | SQLite database path |
+| `--log-level` | `INFO` | `DEBUG`, `INFO`, `WARNING` or `ERROR` |
+| `--timeline-capacity` | 50000 | Per-second timeline buckets kept (1 to 1000000) |
+| `--scatter-capacity` | 5000 | Reservoir samples per scatter plot (1 to 1000000) |
 
-| Component | Log file |
-|-----------|----------|
-| Postprocessor | `plugin.web-dashboard.log` |
-| Web App | `plugin.web-dashboard-app.log` |
+The web app restores all previously collected data from SQLite on startup, so it
+can be restarted independently of the postprocessor without data loss. The
+dashboard is then available at `http://localhost:8111`.
 
-Both rotate at 10 MB, keeping 3 backups.
-
-```shell
-tail -f /opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/etc/plugin.web-dashboard.log
-tail -f /opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/etc/plugin.web-dashboard-app.log
-```
-
-# Troubleshooting
+## Troubleshooting
 
 **Dashboard not loading** — confirm `web_app.py` is running and port 8111 is free.
 
-**No data appearing** — run `curl http://localhost:8111/api/stats` to verify the web app is reachable, and check the postprocessor log for `Could not reach web app` warnings.
+**No data appearing** — run `curl http://localhost:8111/api/stats` to verify the
+web app is reachable, and check the postprocessor log for `Could not reach web
+app` warnings.
 
-**Port conflict** — set `port` in `[web_server]` and `url` in `[web_app]` to a free port, then restart both components.
+## Security
 
-# Security
+The web app binds to `0.0.0.0` with no authentication. For production
+deployments, put it behind a reverse proxy with authentication and HTTPS.
 
-The web app binds to `0.0.0.0` with no authentication. For production deployments, put it behind a reverse proxy with authentication and HTTPS.
+## Licence
 
-# Licence
-
-Copyright 2025, Network Optix, All rights reserved.
+Copyright 2026, Network Optix, All rights reserved.

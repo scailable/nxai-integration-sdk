@@ -1,0 +1,39 @@
+[
+    {
+        "Name": "CLIP-Post-Example",
+        "Command": "/path/to/build/postprocessor-python-clip-example/postprocessor-python-clip-example",
+        "Schedule": "OBJECTS",
+        "ReceiveBinaryData": true,
+        "LogFilepath": "/tmp/postprocess.clip-example.stdout.log",
+        "Config": {
+            "LogLevel": "DEBUG"
+        },
+        "UserSettings": [
+            {
+                "type": "DoubleSpinBox",
+                "name": "event_cooldown_sec",
+                "caption": "Event Cooldown (seconds)",
+                "description": "Minimum time between repeated CLIP prompt-recognized events for the same winning prompt on a device",
+                "defaultValue": 0
+            },
+            {
+                "type": "Repeater",
+                "count": 5,
+                "startIndex": 1,
+                "template": {
+                    "type": "TextField",
+                    "name": "prompt#",
+                    "caption": "Prompt #",
+                    "description": "Text prompt # to score the frame against. Must match preprocessor-python-clip-example's prompt # in the same order.",
+                    "defaultValue": ""
+                }
+            }
+        ],
+        "Events": [
+            {
+                "ID": "clip.event",
+                "Name": "CLIP prompt recognized"
+            }
+        ]
+    }
+]

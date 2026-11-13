@@ -1,306 +1,155 @@
 # Postprocessor Python ANPR Example
 
-This postprocessor is designed to work with OCR models (like CCT - Compact Convolutional Transformer) that output raw character logits. It converts these logits into readable text and stitches the results back into the metadata of the original objects.
+A v5 post-processor for the license-plate OCR model chained after a plate
+detector. It decodes each plate crop's OCR logits into readable text and
+writes it straight onto the original plate object as attributes, emitting a
+deduplicated `plate_recognized` event once the recognized text clears a
+confidence threshold.
 
-## Overview
+## What it does
 
-The postprocessor handles two types of messages in a high-performance asynchronous flow:
-1. **OCR Messages**: Receives raw logits (e.g., 9×37 float32 tensor), decodes them into text using argmax, and stores the result in a local cache.
-2. **Detector Messages**: Receives object detections, retrieves the latest decoded OCR text from the cache for each object ID, and updates the message metadata with `License Plate Text` and `Confidence` attributes.
+The processor is assigned to the **OCR model only**. The AI Manager sends it
+one `OBJECTS`-schedule message per plate crop, carrying:
 
-## Key Features
+- `OriginalObjectID` — the track ID of the plate object the crop was taken
+  from. It is the only field of that object the
+  processor receives.
+- A raw `Tensors` block with the crop's NxM float32 character logits.
 
-- **Asynchronous Processing**: Uses a worker pool for OCR decoding to prevent blocking the main communication loop.
-- **Caching Logic**: Implements an `OcrCache` to store recognition results, allowing immediate responses to detector messages with the most recent OCR data.
-- **Plate Recognized Event**: Emits an `anpr.plate_recognized` Analytics Event when a license plate is recognized with sufficient confidence. Duplicate recognitions for the same object track are suppressed via a TTL-based deduplication cache.
-- **Robust Configuration**: Optional INI at `../etc/plugin.anpr.ini`; first CLI argument is always the socket path (same as other postprocessors).
-- **Nuitka Integration**: Fully compatible with Nuitka for compiling into a high-performance standalone binary.
+`handle_message` decodes the logits with `LogitsOcrEngine` and keeps the
+best-confidence reading per plate in an `OcrCache` (with a TTL, so stale
+entries expire). It then answers with an attribute-only update of the
+original plate object (`InferenceMessage.update_original_object`):
 
-## Model Output Format
+- **A reading exists for the plate** (from this crop or an earlier one): sets
+  `License Plate Text` and `Confidence` to the best reading so far, and emits
+  `anpr.plate_recognized` when the plate's text differs from the last text an
+  event was emitted for and its confidence clears `min_confidence`
+  (deduplicated via `EventDeduplicationCache`).
+- **No reading** (blank decode, unusable tensors, nothing cached): lists both
+  attributes under `removeAttributes`, so the plate never keeps text from a
+  stale result.
 
-By default, the postprocessor expects:
-- **Shape**: (9, 37) — 9 character positions, 37 classes.
-- **Character Mapping**: `0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ ` (37 classes).
-- **Tensor Name**: `Identity:0` (configurable via `.ini`).
+The update carries only the plate's `ID`, its attributes and
+`removeAttributes` — no bounding box or confidence — so the AI Manager keeps
+the object's detection as-is and only edits its attributes. This needs an
+AI Manager plugin that accepts attribute-only object updates and
+`removeAttributes`.
 
-## Example Models
+## Models
 
-The `example_models` directory at the repository root contains two ONNX models intended for use with this postprocessor in the AI Manager pipeline:
+Two ONNX models (a plate detector and a logits-emitting OCR model, chained
+in **Feature Extraction** mode) are required to drive this processor — see
+[MODELS.md](MODELS.md) for upload and pipeline-chaining steps.
 
-- **License_Plate_Detector.onnx**: Detector model that produces bounding boxes for license plates. Use it as the detector in the pipeline; the postprocessor attaches the recognized text to these objects.
-- **License_Plate_OCR.onnx**: OCR model that produces raw character logits. Use it as the OCR model in the pipeline; the postprocessor decodes the logits and caches results by object ID.
+## Behavior change from the earlier v5 version
 
-When building the pipeline in the AI Manager, chain the **License_Plate_Detector** model with the **License_Plate_OCR** model in **Feature Extraction** mode, and set the extracted feature name to **LP** (License Plate).
+- **Assigned to the OCR model only.** It used to be assigned to both models,
+  caching OCR results from the chained stage and attaching them to the
+  detector's message for the same object on a later frame. A chained-stage
+  processor can now edit the original object by its ID, so the plate text is
+  applied on the same frame.
+- **OCR decoding is synchronous**, since the result has to be in the response
+  to the same message. The OCR worker pool and its `ocr_worker_count`
+  `Config` value are gone.
 
-These models match the expected formats described in **Model Output Format** and **Message Flow and Formats**. Pipeline configuration is described in **AI Manager Integration**.
+## Behavior change from v4
 
-## Requirements
+- **`min_confidence` is a live `UserSettings` control**,
+  read fresh from `message.user_settings` on every message with a hardcoded
+  default fallback (`0.95`) — replacing the v4 INI value overridden by an
+  `externalprocessor.`-prefixed `ExternalProcessorSettings` key.
+- **`ocr_output_name`, `cache_ttl_sec`, `plate_class_name` are launch-time
+  `Config` values** (`--key value` in `external_postprocessors.json`),
+  replacing the removed `plugin.anpr.ini` file entirely.
+- **The per-socket-path singleton lock is gone**: v5 launches exactly one
+  process per registration entry over its own dedicated IPC channels, so
+  there's no shared socket path to race on.
+- **The emitted event drops the v4 `Caption` field** (v5 `EventMetadata`
+  carries only `type_id` + `description`) and carries the id
+  `anpr.plate_recognized` exactly as registered in
+  `external_postprocessors.json`, with no `nx.nxai.` prefix.
 
-To build and install this postprocessor, you need the following dependencies:
+## Registration
 
-**Linux:**
-- cmake (3.30 or higher)
-- g++
-- python3-pip
-- python3-venv
-- patchelf (required for Nuitka)
+Add the processor to `external_postprocessors.json` (see the colocated
+`external_postprocessors.json` and
+`.claude/docs/external_postprocessors_json.md`):
 
-**Windows:**
-- cmake (3.30 or higher)
-- MSVC (Visual Studio) or MinGW
-- python3-pip
-- python3-venv
-
-Install dependencies on Linux:
-```bash
-sudo apt install cmake g++ python3-pip python3-venv patchelf
+```json
+{
+    "Name": "ANPR-Example",
+    "Command": "/path/to/build/postprocessor-python-anpr-example/postprocessor-python-anpr-example",
+    "Schedule": "OBJECTS",
+    "ReceiveBinaryData": true,
+    "LogFilepath": "/tmp/postprocess.anpr-example.stdout.log",
+    "Config": {
+        "LogLevel": "DEBUG",
+        "ocr_output_name": "Identity:0",
+        "cache_ttl_sec": "300",
+        "plate_class_name": "LP"
+    },
+    "UserSettings": [
+        {
+            "type": "DoubleSpinBox",
+            "name": "min_confidence",
+            "caption": "Minimum Confidence",
+            "description": "Minimum OCR confidence (0.0-1.0) to emit a plate_recognized event",
+            "defaultValue": 0.95
+        }
+    ],
+    "Events": [
+        {
+            "ID": "anpr.plate_recognized",
+            "Name": "License plate recognized"
+        }
+    ]
+}
 ```
 
-## Installation and Build
+Key points:
 
-This postprocessor is integrated into the SDK's CMake build system.
+- `Schedule: "OBJECTS"` — the processor runs on the OCR model's
+  inference-results messages, which carry `OriginalObjectID`.
+- `ReceiveBinaryData: true` — **required**. It is what adds the `Tensors`
+  block the OCR path reads; without it every plate gets its attributes
+  removed and the processor logs a warning per message.
+- `Config` carries the OCR output tensor name to extract from the `Tensors`
+  block, the cache TTL in seconds, and the class name the original plate
+  object is returned under (the detector model's plate class, `LP` for the
+  shipped model). The processor falls back to the same hardcoded defaults
+  (`Identity:0`, `300.0`, `LP`) if any key is omitted.
+- `UserSettings` declares `min_confidence` (`DoubleSpinBox`, default
+  `0.95`) as a live, NX-plugin-UI-adjustable control.
+- `Events` declares the single bare event id the processor may emit;
+  undeclared ids are silently dropped by the AI Manager.
+- The processor emits `anpr.plate_recognized` exactly as the JSON declares
+  it. The AI Manager copies `Events[].ID` into the DeviceAgent manifest
+  verbatim and relays emitted ids verbatim, and the mediaserver drops an
+  event whose id is not in the manifest — so a `nx.nxai.`-prefixed emitted
+  id never reaches the VMS event pipeline. Object classes are the
+  opposite: the engine still prefixes those with `nx.nxai.`.
+- Select this processor for the **OCR model only** in the AI Manager
+  pipeline editor — see [MODELS.md](MODELS.md) for the chaining steps.
 
-### Build Steps
+## Build, test, install
 
-Use **Release** configuration so that the installed binary and shared library match what the install step expects (nxai-utilities and the postprocessor should be built in the same configuration).
+Build via the CMake tree:
 
-**Linux** (single-config):
-```bash
-# From the project root
-mkdir -p build
-cd build
-cmake -DCMAKE_BUILD_TYPE=Release ..
-cmake --build . --target postprocessor-python-anpr-example
-```
-
-**Windows** (multi-config; use `--config Release` for build and install):
-```bash
-# From the project root
-mkdir -p build
-cd build
+```shell
+mkdir -p build && cd build
 cmake ..
-cmake --build . --config Release --target postprocessor-python-anpr-example
-```
-
-On Linux you can alternatively use `make postprocessor-python-anpr-example` after configuring with `CMAKE_BUILD_TYPE=Release`.
-
-The compiled standalone binary will be located at:
-`build/postprocessor-python-anpr-example/postprocessor-python-anpr-example`
-
-### Installation
-
-Once compiled in **Release**, install the postprocessor and its dependencies to the AI Manager's postprocessors directory:
-
-**Linux:**
-```bash
-# From the build directory
+cmake --build . --target postprocessor-python-anpr-example
 cmake --install . --component postprocessor-python-anpr-example
 ```
 
-**Windows** (must use Release for install):
-```bash
-# From the build directory
-cmake --install . --config Release --component postprocessor-python-anpr-example
+Run the colocated unit tests:
+
+```shell
+cd postprocessor-python-anpr-example
+PYTHONPATH=../nxai-utilities:.. python -m unittest test_postprocessor_python_anpr_example -v
 ```
 
-This command installs:
-- The postprocessor binary: `postprocessor-python-anpr-example` (or `.exe` on Windows)
-- The shared library required for communication:
-  - **Linux**: `libnxai-c-utilities-shared.so`
-  - **Windows**: `nxai-c-utilities-shared.dll`
+## Licence
 
-Both files are installed to the same directory:
-- **Linux**: `/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors/`
-- **Windows**: `C:\Windows\System32\config\systemprofile\AppData\Local\Network Optix\Network Optix MetaVMS Media Server\nx_ai_manager\nxai_manager\postprocessors\`
-
-The shared library is automatically installed alongside the binary and is required for `nxai_communication_utils` to function properly. It provides the low-level socket/pipe communication functions used by the postprocessor.
-
-## Setting Permissions
-
-**Linux only**: The application and library files must be readable and executable by the NX AI Manager. Set the appropriate permissions:
-
-```bash
-sudo chmod -R a+x /opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors/
-```
-
-## Configuration
-
-The postprocessor can be started with the **socket path as an optional first argument** (e.g., `postprocessor-python-anpr-example.exe C:\path\to\socket.sock`). Additional configuration options are read from a fixed path: `../etc/plugin.anpr.ini` (relative to the postprocessor binary). If the socket path is provided as the first argument, it takes priority over the value set in the .ini configuration file. Copy the example configuration file to the AI Manager's configuration directory:
-
-**Linux:**
-```bash
-cp postprocessor-python-anpr-example/plugin.anpr.ini.example \
-   /opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/etc/plugin.anpr.ini
-```
-
-**Windows:**
-Copy the file to:
-```
-C:\Windows\System32\config\systemprofile\AppData\Local\Network Optix\Network Optix MetaVMS Media Server\nx_ai_manager\nxai_manager\etc\plugin.anpr.ini
-```
-
-### Configuration Options (`.ini`)
-
-- `[common]`:
-    - `log_level`: Logging verbosity (DEBUG, INFO, WARNING, ERROR).
-    - `socket_path`: Unix socket path for AI Manager communication.
-    - `log_file`: Path to the log file.
-- `[ocr]`:
-    - `worker_count`: Number of parallel threads for OCR decoding.
-    - `output_name`: The name of the output tensor to extract from the inference result.
-- `[anpr]`:
-    - `min_confidence`: Minimum OCR confidence (0.0–1.0) required to emit a `plate_recognized` event. Default: `0.95`. Can also be overridden per-message via `ExternalProcessorSettings` (key: `anpr.min_confidence`).
-
-## Message Flow and Formats
-
-The postprocessor communicates using the MessagePack protocol. It handles different message types as follows:
-
-### 1. OCR Messages & Generic Messages
-For **OCR Messages** (containing raw logits) and any other **Generic Messages** not explicitly handled, the postprocessor **immediately returns the original, unmodified message**. 
-OCR decoding is performed asynchronously in the background to update the internal cache.
-
-**Example OCR Message Structure (Input/Output):**
-```json
-{
-  "OriginalObjectID": "uuid-1234",
-  "BinaryOutputs": [
-    {
-      "Name": "Identity:0",
-      "Data": "<binary_float32_logits>"
-    }
-  ]
-}
-```
-
-### 2. Detector Messages
-When a **Detector Message** (containing bounding boxes) is received, the postprocessor looks up the `ObjectIDs` in its cache. If a match is found, it adds the recognized text and confidence to the object's metadata.
-
-**Example Detector Message (Input):**
-```json
-{
-  "BBoxes_xyxy": {
-    "license_plate": [100, 150, 300, 200]
-  },
-  "ObjectsMetaData": {
-    "license_plate": {
-      "ObjectIDs": ["uuid-1234"],
-      "AttributeKeys": [[]],
-      "AttributeValues": [[]]
-    }
-  }
-}
-```
-
-**Example Detector Message (Output with OCR data):**
-```json
-{
-  "BBoxes_xyxy": {
-    "license_plate": [100, 150, 300, 200]
-  },
-  "ObjectsMetaData": {
-    "license_plate": {
-      "ObjectIDs": ["uuid-1234"],
-      "AttributeKeys": [["License Plate Text", "Confidence"]],
-      "AttributeValues": [["ABC1234", "0.9850"]]
-    }
-  }
-}
-```
-
-## AI Manager Integration
-
-To enable this postprocessor, you must configure it in the AI Manager pipeline settings for **both models** (the Detector and the OCR model). This is necessary because the postprocessor needs to receive messages from both to maintain its cache and update metadata. Example ONNX models are provided in the `example_models` directory at the repository root (see **Example Models**).
-
-Add the postprocessor to `external_postprocessors.json`. Example full file contents:
-
-**Linux:**
-```json
-{
-  "externalPostprocessors": [
-    {
-      "Name": "ANPR-Example",
-      "Command": "/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors/postprocessor-python-anpr-example",
-      "SocketPath": "/tmp/postprocessor-anpr-example.sock",
-      "ReceiveBinaryData": true,
-      "Events": [
-        {
-          "ID": "anpr.plate_recognized",
-          "Name": "Plate Recognized"
-        }
-      ]
-    }
-  ]
-}
-```
-
-**Windows:**
-```json
-{
-  "externalPostprocessors": [
-    {
-      "Name": "ANPR-Example",
-      "Command": "C:\\Windows\\System32\\config\\systemprofile\\AppData\\Local\\Network Optix\\Network Optix MetaVMS Media Server\\nx_ai_manager\\nxai_manager\\postprocessors\\postprocessor-python-anpr-example.exe",
-      "SocketPath": "C:\\Windows\\SystemTemp\\postprocessor-anpr-example.sock",
-      "ReceiveBinaryData": true,
-      "Events": [
-        {
-          "ID": "anpr.plate_recognized",
-          "Name": "Plate Recognized"
-        }
-      ]
-    }
-  ]
-}
-```
-
-**Note**: The `Events` array declares which Analytics Events this postprocessor can emit. Without it, `plate_recognized` will not appear in the Nx Client Analytics Events list and cannot be used in Camera Rules.
-
-**Note**: The shared library (`libnxai-c-utilities-shared.so` on Linux or `nxai-c-utilities-shared.dll` on Windows) must be in the same directory as the postprocessor binary. This is handled automatically by the installation process.
-
-### Restarting the Server
-
-After installation and configuration, restart the NX Server to load the new postprocessor:
-
-**Linux:**
-```bash
-sudo service networkoptix-metavms-mediaserver restart
-```
-
-**Windows:**
-Restart the NX Server using the Tray Tool (icon in the Windows system tray). Right-click the icon and select "Restart Server" or use the appropriate menu option.
-
-## Viewing Logs
-
-The postprocessor writes logs to the file specified in the configuration. To view logs in real-time:
-
-**Linux:**
-```bash
-tail -f /opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/etc/plugin.anpr.log
-```
-
-**Windows:**
-Open the log file in a text editor or use PowerShell:
-```powershell
-Get-Content "C:\Windows\System32\config\systemprofile\AppData\Local\Network Optix\Network Optix MetaVMS Media Server\nx_ai_manager\nxai_manager\etc\plugin.anpr.log" -Wait -Tail 50
-```
-
-Or check the log file path configured in your `plugin.anpr.ini` file.
-
-## Development and Testing
-
-A comprehensive test suite is provided in `test_postprocessor_python_anpr_example.py`. To run tests:
-
-```bash
-python3 -m unittest test_postprocessor_python_anpr_example.py
-```
-
-## Dependencies
-
-**Python packages** (installed automatically during build):
-- Python 3.10+
-- numpy
-- msgpack
-- nuitka (for building)
-
-**System libraries** (installed via CMake):
-- `libnxai-c-utilities-shared.so` (Linux) or `nxai-c-utilities-shared.dll` (Windows) - automatically installed with the postprocessor
+Copyright 2026, Network Optix, All rights reserved.

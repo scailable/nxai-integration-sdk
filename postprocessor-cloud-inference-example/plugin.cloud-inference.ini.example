@@ -1,4 +1,0 @@
-[common]
-debug_level=INFO
-[inference]
-image_path=/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors/face.png

@@ -1,0 +1,17 @@
+[
+    {
+        "Name": "Events-Example",
+        "Command": "/path/to/build/postprocessor-python-events-example/postprocessor-python-events-example",
+        "Schedule": "OBJECTS",
+        "LogFilepath": "/tmp/postprocess.events-example.stdout.log",
+        "Config": {
+            "LogLevel": "DEBUG"
+        },
+        "Events": [
+            {
+                "ID": "ex.example.event",
+                "Name": "Example event"
+            }
+        ]
+    }
+]

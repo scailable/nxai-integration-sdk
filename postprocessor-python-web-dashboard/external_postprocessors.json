@@ -1,0 +1,12 @@
+[
+    {
+        "Name": "Web-Dashboard",
+        "Command": "/path/to/build/postprocessor-python-web-dashboard/postprocessor-python-web-dashboard",
+        "Schedule": "OBJECTS",
+        "LogFilepath": "/tmp/postprocess.web-dashboard.stdout.log",
+        "Config": {
+            "LogLevel": "DEBUG",
+            "webapp_url": "http://localhost:8111"
+        }
+    }
+]

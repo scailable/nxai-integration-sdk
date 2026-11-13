@@ -1,5 +1,14 @@
+import os
+import sys
+import threading
 import time
 import unittest
+
+_nxai_utilities = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "nxai-utilities")
+)
+if _nxai_utilities not in sys.path:
+    sys.path.insert(0, _nxai_utilities)
 
 from message_processing_utils.general.ocr.cache import OcrCache
 
@@ -70,6 +79,61 @@ class TestOcrCacheMaxConfidence(unittest.TestCase):
         cache.cache_ocr_result(_Msg(None), "ABC", 0.75)
         cache.cache_ocr_result(_Msg(""), "ABC", 0.75)
         self.assertEqual(cache._ocr_results_cache, {})
+
+
+class TestOcrCacheThreadSafety(unittest.TestCase):
+    """OCR results are written from worker threads while the main loop cleans up."""
+
+    def test_cleanup_survives_concurrent_writes(self):
+        cache = OcrCache(engine=None, output_name="Identity:0", ttl_sec=30.0)
+        errors = []
+        stop = threading.Event()
+        started = threading.Barrier(5)
+
+        def writer(start):
+            started.wait()
+            i = start
+            while not stop.is_set():
+                cache.cache_ocr_result(_Msg(f"obj-{i}"), "ABC", 0.75)
+                i += 1
+
+        writers = [threading.Thread(target=writer, args=(n * 1_000_000,)) for n in range(4)]
+        for thread in writers:
+            thread.start()
+        started.wait()
+        # cleanup() must iterate a dict large enough that a concurrent insert
+        # lands mid-iteration; over a near-empty dict the race cannot be hit.
+        while len(cache._ocr_timestamps) < 50_000:
+            time.sleep(0.01)
+        try:
+            for _ in range(200):
+                cache.cleanup(time.monotonic())
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            stop.set()
+            for thread in writers:
+                thread.join()
+
+        self.assertEqual(errors, [])
+
+    def test_concurrent_writes_are_not_lost(self):
+        cache = OcrCache(engine=None, output_name="Identity:0")
+        barrier = threading.Barrier(4)
+
+        def writer(confidence):
+            barrier.wait()
+            for _ in range(500):
+                cache.cache_ocr_result(_Msg("obj-1"), "ABC", confidence)
+
+        confidences = [0.10, 0.50, 0.80, 0.99]
+        threads = [threading.Thread(target=writer, args=(c,)) for c in confidences]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        self.assertEqual(cache.get_cached_result("obj-1"), ("ABC", 0.99))
 
 
 if __name__ == "__main__":

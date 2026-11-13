@@ -6,59 +6,83 @@ Generate the `external_postprocessors.json` registration entry for an existing p
 
 ## Steps
 
-1. **Detect the active NX VMS installation** by running these checks in order, stopping at the first match:
-   - `systemctl is-active networkoptix-metavms-mediaserver` → `VMS_BASE=/opt/networkoptix-metavms`
-   - `systemctl is-active networkoptix-mediaserver` → `VMS_BASE=/opt/networkoptix`
-   - `/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/` exists → use metavms
-   - `/opt/networkoptix/mediaserver/var/nx_ai_manager/` exists → use witness
-   - Neither found → set `VMS_BASE=/opt/networkoptix-metavms` as a placeholder (the snippet will still be correct once the VMS is installed)
+1. **Locate** the processor directory. Try `postprocessor-python-<name>/` first, then the literal argument.
 
-2. **Locate** the processor directory. Try `postprocessor-python-<name>/` first, then the literal argument.
+2. **Read** the main `.py` file.
 
-3. **Read** the main `.py` file.
-
-4. **Detect** what the processor needs by scanning the source:
+3. **Detect** what the processor needs by scanning the source. Count only code, not comments, docstrings or log strings. A key or ID is often a module constant (e.g. `msg.objects[INJECTED_CLASS]`); resolve it to its string literal.
 
    | Flag | Detect when |
    |------|-------------|
-   | `ReceiveBinaryData: true` | `BinaryOutputs` appears in the code |
-   | `ReceiveInputTensor: true` | `SHMKEY` or `SharedMemory` appears |
-   | `ReceiveConfidenceData: true` | `Confidences` is read from `ObjectsMetaData` |
-   | `NoResponse: true` | `return_data = False` is set, or there is no `connection.send(` call |
+   | `ReceiveBinaryData: true` | `tensors` is read off the inbound message (e.g. `msg.tensors`); or the raw `"Tensors"` key is read off the unpacked msgpack dict (e.g. `raw_data.get("Tensors")`); or the message is parsed by a `message_processing_utils` factory (`create_anpr_message_from_bytes`, `create_speed_message_from_bytes`), which reads the `Tensors` block in `parse_typed_message` |
+   | `ReceiveInputImage: true` | `image_data` is read off the inbound message (e.g. `msg.image_data`) |
+   | `NoResponse: true` | there is no `send_response(` call on the IPC processor object. An HTTP handler's `self.send_response(...)` does not count. |
 
-   **Objects** — all string literals used as keys in `BBoxes_xyxy["..."]` assignments.
+   **Objects** — all class keys the processor writes to the message's `objects` map (`msg.objects[...] = ...`, `msg.objects[...].append(`, `msg.objects.setdefault(...`). Count only writes in the processor's own file. A key that is only read (e.g. the detector's own class in `msg.objects.get(...)`), or a class whose existing objects only get attributes (e.g. through `update_original_object(...)`), is not a new class and is not declared.
 
-   **Events** — all string literals appearing as the first argument of `add_event(` calls, or as `"ID":` values inside dicts that also contain a `"Caption":` key.
+   **Events** — all values assigned to `type_id` on an `EventMetadata()` (e.g. `event.type_id = "..."`), and the first argument of `add_event(` calls. Declare each ID verbatim, with no `nx.nxai.` prefix.
 
-   **Settings** — all string literals accessed via `ExternalProcessorSettings.get("..."` or `ExternalProcessorSettings["..."`.
+   **`UserSettings` keys** — all string literals accessed via `user_settings["..."]`, `user_settings.get("..."`, or `"..." in <msg>.user_settings` on the message's `user_settings` map. These are names only; the caption, description, control type and default value can't be inferred from code, so they still need a human to write the actual `UserSettings` control declarations (see `postprocessor-python-settings-example/settings_model.md` for the control grammar).
 
-5. **Read** the `Postprocessor_Socket_Path` assignment in the script to determine the socket path. Fall back to `/tmp/<name>-postprocessor.sock` if not found.
+   **`Config` keys** — all string literals read off the variable assigned from `nxai_postprocessor_sdk.load_config(sys.argv)` (subscript, `.get(...)`, or `in <var>`), excluding `ProcessorName` and `LogLevel` (SDK-internal).
 
-6. **Generate** the JSON snippet. Omit boolean flags that are `false` (the default). Omit empty arrays.
+4. **Generate** the JSON element. `Schedule` and `LogFilepath` are always included; boolean flags default to `false` and are omitted when `false`; empty arrays are omitted.
+
+   Derive the names from the directory name found in step 1, the same way `/new-processor` step 9 does:
+
+   - `<processor-dir>` is the directory name, e.g. `postprocessor-python-anpr-example`.
+   - `<name>` is `<processor-dir>` with a leading `postprocessor-python-` removed (e.g. `anpr-example`). If the directory does not start with that prefix, remove a leading `postprocessor-` instead. Keep the case and the hyphens.
+   - `Name` is `<processor-dir>`.
+   - `LogFilepath` is `/tmp/postprocess.<name>.stdout.log`.
 
    ```json
    {
-       "Name": "<Name>-Postprocessor",
-       "Command": "<VMS_BASE>/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors/postprocessor-python-<name>",
-       "SocketPath": "<detected socket path>",
-       <detected flags>,
+       "Name": "<processor-dir>",
+       "Command": "/path/to/build/<processor-dir>/<processor-dir>",
+       "Schedule": "OBJECTS",
+       "LogFilepath": "/tmp/postprocess.<name>.stdout.log",
+       <detected flags>
        "Objects": [ { "ID": "<id>", "Name": "<Human Name>" } ],
-       "Events":  [ { "ID": "<id>", "Name": "<Human Name>" } ]
+       "Events": [ { "ID": "<id>", "Name": "<Human Name>" } ],
+       "Config": {
+           "LogLevel": "DEBUG",
+           "<config key>": "<value>"
+       }
    }
    ```
 
-   For `Objects` and `Events`, derive `Name` from the ID by title-casing the last dot-separated segment (e.g. `anpr.plate_recognized` → `Plate Recognized`).
+   Field order is fixed: `Name`, `Command`, `Schedule`, `LogFilepath`, the detected flags (in the order of the step 3 table), `Objects`, `Events`, `Config`. Put one `"Flag": true,` line per detected flag, each followed by a comma, and no line when there are no flags. Inside `Config`, `LogLevel` comes first, then the detected keys in the order of their first read in the source; put a comma after every entry except the last.
 
-7. **Print** the snippet and this reminder:
+   **`Config` values.** Launch arguments are strings, so every value is a JSON string.
+   - If the read has a default (`.get(key, <default>)`), use the default. Resolve a module constant to its literal. Write a string as is, and write a number as it appears in the source, inside quotes (`300.0` becomes `"300.0"`). Ignore a wrapper such as `float(...)` around the read.
+   - If the read has no default (a subscript, an `in` test, or `.get(key)`), use the empty string `""`.
+
+   **`UserSettings`.** Do not write a `UserSettings` key in this step, not even an empty array. A control cannot be derived from code, so a human adds the array later; the step 6 reminder tells them to.
+
+   For `Objects` and `Events`, derive `Name` from the ID: take the last dot-separated segment, replace `_` with a space and title-case it (e.g. `anpr.plate_recognized` → `Plate Recognized`, `python_example` → `Python Example`).
+
+5. **Add** the element to the array in `<processor-dir>/external_postprocessors.json` (create the file with `[ ... ]` if it doesn't exist yet). This is the file every migrated processor in this repo carries colocated with its source — treat it as the canonical registration for the processor.
+
+6. **Print** the snippet and this reminder:
 
    ```
-   Add this entry inside the "externalPostprocessors": [...] array in:
-     <VMS_BASE>/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors/external_postprocessors.json
+   Added to <processor-dir>/external_postprocessors.json.
 
-   Development mode (no build needed): omit the "Command" field and start the processor manually.
-   The AI Manager will send data to the socket and assume the process is already running.
+   If any UserSettings keys were detected, declare their controls by hand in the
+   "UserSettings" array (type, caption, description, defaultValue) — see
+   postprocessor-python-settings-example/settings_model.md for the control grammar.
 
-   After editing the JSON:
-     sudo chmod -R a+x <VMS_BASE>/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors/
+   Development mode (no build needed): replace the "Command" field with
+   "Port": <n> and start the processor manually with --port <n>. The AI Manager
+   then connects to 127.0.0.1:<n> instead of starting the processor. An entry
+   with neither "Command" nor "Port" is skipped.
+
+   For a production install, copy this element into the bare array in:
+     <VMS_BASE>/mediaserver/var/nx_ai_manager/postprocessors/external_postprocessors.json
+   and point "Command" at the installed binary path, e.g.:
+     <VMS_BASE>/mediaserver/var/nx_ai_manager/postprocessors/<processor-dir>
+
+   After editing the installed JSON:
+     sudo chmod -R a+x <VMS_BASE>/mediaserver/var/nx_ai_manager/postprocessors/
      sudo service <VMS_SERVICE> restart
    ```

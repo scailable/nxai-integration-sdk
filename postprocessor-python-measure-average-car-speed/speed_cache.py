@@ -27,34 +27,35 @@ class SpeedMeasurementCache:
     
     Tracks when a license plate was first detected on each camera and calculates
     average speed when the same plate is detected on both cameras.
+
+    Known limitation: `_cache` timestamps come from the frame clock
+    (`message.timestamp`, the engine's Timestamp in microseconds since the
+    epoch), while `_cleanup_expired`, `set_speed` and `get_speed` compare
+    against the wall clock (`datetime.now()`). These coincide on a live
+    stream, but on archive playback or with a skewed camera clock the two
+    domains diverge, so `_cache` entries may be purged immediately or never
+    expire.
     """
 
-    def __init__(
-        self,
-        timeout_sec: float,
-        distance_m: float,
-        camera_1_id: str,
-        camera_2_id: str,
-        logger_instance: Optional[logging.Logger] = None
-    ):
+    def __init__(self, logger_instance: Optional[logging.Logger] = None):
         """
-        Initialize speed measurement cache.
-        
+        Initialize speed measurement cache in its unconfigured state.
+
+        The cache stays inert (no camera ids, so `add_detection` always
+        no-ops) until `update_config()` is called with the operator's
+        camera ids, distance and timeout.
+
         Args:
-            timeout_sec: Timeout in seconds for cache entries to expire.
-            distance_m: Distance between cameras in meters.
-            camera_1_id: Device ID (UUID or string) of the first camera.
-            camera_2_id: Device ID (UUID or string) of the second camera.
             logger_instance: Logger instance. If None, uses module logger.
         """
         # {license_plate: {camera_id: first_seen_time}}
         self._cache: Dict[str, Dict[str, datetime]] = {}
         # {license_plate: (speed_ms, last_seen_time)}
         self._speed_cache: Dict[str, tuple[float, datetime]] = {}
-        self._timeout_sec = timeout_sec
-        self._distance_m = distance_m
-        self._camera_1_id = InferenceMessage.normalize_device_id(camera_1_id)
-        self._camera_2_id = InferenceMessage.normalize_device_id(camera_2_id)
+        self._timeout_sec = 0.0
+        self._distance_m = 0.0
+        self._camera_1_id: Optional[str] = None
+        self._camera_2_id: Optional[str] = None
         self._cleanup_interval_sec = 15.0
         self._last_cleanup = datetime.now()
         self._lock = threading.RLock()
@@ -74,8 +75,8 @@ class SpeedMeasurementCache:
         Update camera IDs, distance and timeout. Clears caches if camera set changed.
         Thread-safe.
         """
-        new_cam1 = InferenceMessage.normalize_device_id(camera_1_id)
-        new_cam2 = InferenceMessage.normalize_device_id(camera_2_id)
+        new_cam1 = _normalized_camera_id(camera_1_id)
+        new_cam2 = _normalized_camera_id(camera_2_id)
         with self._lock:
             cameras_changed = (
                 new_cam1 != self._camera_1_id or new_cam2 != self._camera_2_id
@@ -116,13 +117,19 @@ class SpeedMeasurementCache:
         
         Args:
             license_plate: Recognized license plate text.
-            camera_id: Camera ID where detection occurred (will be normalized).
+            camera_id: Camera ID where detection occurred. Must already be in
+                canonical form, matching the configured camera ids as-is
+                (this method does not normalize it); pass
+                `InferenceMessage.device_id`, not a raw device id.
             timestamp: Timestamp of detection.
         
         Returns:
             Average speed in m/s if match found, None otherwise.
         """
         if not license_plate or not license_plate.strip():
+            return None
+        if self._camera_1_id is None or self._camera_2_id is None:
+            self._logger.debug("Cameras are not configured, ignoring detection")
             return None
         if camera_id not in (self._camera_1_id, self._camera_2_id):
             self._logger.debug(
@@ -286,3 +293,15 @@ class SpeedMeasurementCache:
         if self._cleanup_timer:
             self._cleanup_timer.cancel()
             self._cleanup_timer = None
+
+
+def _normalized_camera_id(camera_id: str) -> Optional[str]:
+    """Normalize a configured camera id, or None if it is unset.
+
+    An unset id is the default state until the operator fills the UserSettings
+    field in, so it must not go through normalize_device_id(), which reports an
+    absent id as an error.
+    """
+    if not camera_id or not str(camera_id).strip():
+        return None
+    return InferenceMessage.normalize_device_id(camera_id)

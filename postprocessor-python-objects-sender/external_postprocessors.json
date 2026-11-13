@@ -1,0 +1,63 @@
+[
+    {
+        "Name": "Python-Object-Sender-Postprocessor",
+        "Command": "/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/postprocessors/postprocessor-python-objects-sender",
+        "Schedule": "OBJECTS",
+        "LogFilepath": "/tmp/postprocess.objects-sender.stdout.log",
+        "Config": {
+            "LogLevel": "DEBUG"
+        },
+        "UserSettings": [
+            {
+                "type": "Repeater",
+                "count": 10,
+                "startIndex": 0,
+                "template": {
+                    "type": "GroupBox",
+                    "caption": "Point #",
+                    "filledCheckItems": [
+                        "point#.figure"
+                    ],
+                    "items": [
+                        {
+                            "type": "BoxFigure",
+                            "name": "point#.figure",
+                            "caption": "Point #",
+                            "description": "Point # on the camera"
+                        },
+                        {
+                            "type": "DoubleSpinBox",
+                            "name": "point#.latitude",
+                            "caption": "Latitude",
+                            "description": "Latitude of point #",
+                            "defaultValue": 33878.754,
+                            "minValue": -90000.000,
+                            "maxValue": 90000.000
+                        },
+                        {
+                            "type": "DoubleSpinBox",
+                            "name": "point#.longitude",
+                            "caption": "Longitude",
+                            "description": "Longitude of point #",
+                            "defaultValue": -84450.569,
+                            "minValue": -180000.000,
+                            "maxValue": 180000.000
+                        }
+                    ]
+                }
+            },
+            {
+                "type": "TextField",
+                "name": "server_address",
+                "caption": "MQTT plugin address",
+                "defaultValue": "http://127.0.0.1:5000"
+            },
+            {
+                "type": "TextField",
+                "name": "topic_path",
+                "caption": "MQTT topic",
+                "defaultValue": "topic1"
+            }
+        ]
+    }
+]

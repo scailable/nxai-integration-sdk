@@ -27,11 +27,9 @@ class TestSpeedMeasurementCache(unittest.TestCase):
         self.camera_2_id = "e3e9a385-7fe0-3ba5-5482-a86cde7faf48"
         self.distance_m = 100.0
         self.timeout_sec = 300.0
-        self.cache = SpeedMeasurementCache(
-            timeout_sec=self.timeout_sec,
-            distance_m=self.distance_m,
-            camera_1_id=self.camera_1_id,
-            camera_2_id=self.camera_2_id
+        self.cache = SpeedMeasurementCache()
+        self.cache.update_config(
+            self.camera_1_id, self.camera_2_id, self.distance_m, self.timeout_sec
         )
 
     def tearDown(self):
@@ -228,6 +226,34 @@ class TestSpeedMeasurementCache(unittest.TestCase):
         self.assertNotIn("XYZ789", self.cache._speed_cache)
         self.assertEqual(self.cache._camera_1_id, new_cam1.lower())
         self.assertEqual(self.cache._camera_2_id, new_cam2.lower())
+
+
+class TestUnconfiguredCameras(unittest.TestCase):
+    """Until both cameras are set in the UI, the cache must stay quiet and inert."""
+
+    def test_empty_camera_ids_log_no_error(self):
+        """An operator who has not filled the fields in yet is not an error."""
+        cache = SpeedMeasurementCache()
+        self.addCleanup(cache.stop)
+        with self.assertNoLogs("message_processing_utils.base.messages", level="ERROR"):
+            cache.update_config("", "", 100.0, 60.0)
+        self.assertIsNone(cache._camera_1_id)
+        self.assertIsNone(cache._camera_2_id)
+
+    def test_detection_ignored_while_unconfigured(self):
+        cache = SpeedMeasurementCache()
+        self.addCleanup(cache.stop)
+        # A message whose DeviceID failed to normalize also arrives as None; it
+        # must not be treated as a match for the unset camera ids.
+        self.assertIsNone(cache.add_detection("ABC123", None, datetime.now()))
+        self.assertEqual(cache._cache, {})
+
+    def test_invalid_camera_ids_ignore_detections(self):
+        cache = SpeedMeasurementCache()
+        cache.update_config("CAMERA-001", "CAMERA-002", 100.0, 60.0)
+        self.addCleanup(cache.stop)
+        self.assertIsNone(cache.add_detection("ABC123", None, datetime.now()))
+        self.assertEqual(cache._cache, {})
 
 
 if __name__ == '__main__':

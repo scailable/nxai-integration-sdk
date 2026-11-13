@@ -2,14 +2,16 @@
 
 // Copyright 2018-present Network Optix, Inc. Licensed under MPL 2.0: www.mozilla.org/MPL/2.0/
 
-In various places in the SDK, e.g. in Manifests of Analytics Plugin entities, there is a
-possibility to define a Settings Model - a JSON describing a hierarchical structure of settings,
-each having its name, type, and default value.
+A Settings Model is a JSON description of a hierarchical structure of settings, each having its
+name, type, and default value. An external processor declares its Settings Model in the
+`UserSettings` field of its entry in `external_postprocessors.json`. The value of `UserSettings` is
+the array of items itself. It has no `{"type": "Settings", "items": [...]}` root object.
 
 The Client can offer a user a dialog with controls corresponding to such Model. When the user fills
 the dialog, a set of values is formed, represented as a map of strings, where the key is the id of
 the particular setting in the Model, and the value is either a string itself (for settings of
-the type String), or a JSON-formatted value (for settings of other types).
+the type String), or a JSON-formatted value (for settings of other types). The AI Manager sends
+the current map to the processor in the root `UserSettings` key of each message.
 
 All editable controls have a value of some type, which can be represented as a string. For values
 of type `String`, this string represents the value itself. For other types, this string is a JSON
@@ -22,46 +24,19 @@ Some field names have the same meaning through all the controls and can have som
 
 Certain fields are supported by some of the controls.
 
-- `"isActive"` - Boolean. Marks the control as "active" - it means that every change of the control
-    value in the GUI immediately (or with some delay in the case of TextField-like fields) triggers
-    sending a request to the Server, without waiting for the confirmation with the "Apply" button.
-    The request executes the code of the Active Setting handler of the entity being set up by these
-    Settings. Note that if the Settings dialog is shown before the entity is created, no Active
-    Setting requests will be fired before the user clicks "Apply" and the entity is created. The
-    setting values sent in such a request are not meant to be "applied" (stored in a database) -
-    they are intended only for preparing a proper reply to the user, which may include an adjusted
-    Settings Model, adjusted values of the GUI controls, and a message to be shown to the user or a
-    URL to be opened in the web browser. The main purpose of Active settings is to give the
-    entities being set up a way to change the Settings Model and values on-the-fly, providing a
-    better user experience. An example could be an Active combo-box which lists the supported
-    measurement units, and the handler code which converts the entered value into the selected
-    unit.
+- `"isActive"` - Boolean. In the NX Analytics SDK, it marks a control as "active": each change of
+    the value sends a request to the entity that the settings belong to. That entity can reply with
+    an adjusted Settings Model. An external processor has no handler for such a request. The AI
+    Manager only forwards the `UserSettings` values with each message. Do not rely on `isActive`
+    or on `"parametersModel"` in a processor.
 
-    ATTENTION: The "Active Setting" feature requires the reaction with the entity that the settings
-    are intended for, like an Analytics Engine or a Device Agent. In certain scenarios, this entity
-    may not exist yet - for example, when an Engine is going to be turned on for a camera for the
-    first time, Device Agent settings are presented to the user (their Settings Model is defined in
-    the Engine Manifest), but the Device Agent is created only after the user clicks `Apply`. In
-    such case the `isActive` flag cannot work and is ignored, so for the optimal user experience it
-    may be found useful to present the initial Settings Model that does not count on `isActive`,
-    and after the settings are applied and the entity (e.g. Device Agent) is created, it may
-    present a more advanced Settings Model which makes use of `isActive`.
+The Settings Model is a JSON array of top-level Setting Models for individual Settings. Those
+Settings that support inner Settings (like `GroupBox`) may have them. In the registration JSON of
+a processor, this array is the value of `UserSettings`:
 
-- `"parametersModel"` - Settings Model JSON object. Applies only for controls with the `"isActive"`
-    property set to `true`. Additional parameters are requested when the active control is triggered.
-    NOTE: The `"parametersModel"` model does not support items with the `"isActive"` property set
-    to `true`.
-
-The Settings Model itself is a JSON object, which field `"items"` is a JSON array containing
-top-level Setting Models for individual Settings, and those Settings that support inner Settings
-(like `GroupBox`) may have them.
-
-    {
-        "type": "Settings",
-        "items": [
-            ...
-        ]
-    }
+    "UserSettings": [
+        ...
+    ]
 
 Here are the descriptions of all available Setting types, with examples of their definition in the
 Settings Model, and examples of their value strings.
@@ -446,7 +421,7 @@ directions).
                 [0.365, 0.805]
             ],
             "direction": "right"
-        }
+        },
         "label": "User Line",
         "showOnCamera": true
     }
@@ -490,10 +465,11 @@ The `"positions"` field is a hint for the client where to position min/max boxes
 ---------------------------------------------------------------------------------------------------
 ## Button
 
-An action button. Technically it is a setting which does not have a value, but can be marked with
-`"isActive" = "true"`. As for any Active setting, it allows to request a set of parameters via
-offering a dialog to the user, and implement any reaction in the Active Setting call-back code, as
-well as display a message to the user or open a URL in the web browser.
+An action button. Technically it is a setting which does not have a value. In the NX Analytics
+SDK, an active `Button` calls the Active Setting handler of the entity being set up.
+
+NOTE: An external processor has no Active Setting handler, so a `Button` does nothing there. Do not
+use `Button` in the `UserSettings` of a processor.
 
 ### Setting Model
 
@@ -529,8 +505,10 @@ Here are the descriptions of all available structure components.
 ---------------------------------------------------------------------------------------------------
 ## Settings
 
-System root element. Must be present only once as the root, containing all other elements and all
-sections.
+System root element of the NX Analytics SDK. Must be present only once as the root, containing all
+other elements and all sections.
+
+NOTE: A processor does not declare this element. Its `UserSettings` is the array of items.
 
 ### Setting Model
 
@@ -563,7 +541,7 @@ Property "name" must be unique, will be used as a caption if caption is not spec
         "type": "Section",
         "name": "root_section",
         "caption": "Example",
-        "items": [  { "type": "CheckBox", "name": "checkbox1", "caption": "Sample CheckBox 1" } ]
+        "items": [  { "type": "CheckBox", "name": "checkbox1", "caption": "Sample CheckBox 1" } ],
         "sections": [
             { "type": "Section", "name": "Nested Section" }
         ]

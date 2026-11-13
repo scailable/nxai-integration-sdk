@@ -8,51 +8,50 @@ import logging
 import uuid
 from abc import ABC, abstractmethod
 from typing import Optional
-from pprint import pformat
 from datetime import datetime
 import msgpack
 import numpy as np
+import nxai_postprocessor_sdk
 
 
 logger = logging.getLogger(__name__)
 
 
 class InferenceMessage(ABC):
-    """Represents a generic inference result message from AI Manager."""
+    """Represents a generic inference result message from AI Manager.
 
-    def __init__(self, message: dict):
-        self._message = message or {}
+    Wraps a typed `nxai_postprocessor_sdk.ObjectsPostProcessorMessage` plus the
+    raw `Tensors` array, which the SDK deliberately leaves unparsed (see
+    `.claude/docs/input_from_ai_manager.md`) so it's read straight off the
+    unpacked msgpack dict here instead.
+    """
+
+    def __init__(self, sdk_message, raw_tensors=None):
+        self._msg = sdk_message
+        self._raw_tensors = raw_tensors or []
 
     @property
     def original_object_id(self):
-        return self._message.get("OriginalObjectID")
-
-    @original_object_id.setter
-    def original_object_id(self, value):
-        self._message["OriginalObjectID"] = value
+        return self._msg.original_object_id
 
     @property
     def device_id(self) -> Optional[str]:
         """Get normalized DeviceID from message."""
-        return self.normalize_device_id(self._message.get("DeviceID"))
+        return self.normalize_device_id(self._msg.device_id)
 
     @property
     def timestamp(self) -> Optional[datetime]:
-        """Get Timestamp from message, converted to datetime."""
-        timestamp_value = self._message.get("Timestamp")
+        """Get Timestamp (microseconds since the epoch) as a datetime."""
+        timestamp_value = self._msg.timestamp
         if timestamp_value is None:
             return None
         if isinstance(timestamp_value, datetime):
             return timestamp_value
         if isinstance(timestamp_value, (int, float)):
-            # Check if timestamp is in microseconds (value > 1e12)
-            # Unix timestamp in seconds is typically < 1e10 (year 2286)
-            # Timestamps > 1e12 are likely in microseconds
-            if timestamp_value > 1e12:
-                # Convert microseconds to seconds
-                timestamp_value = timestamp_value / 1_000_000
+            # The v5 engine always writes Timestamp as timestampUs, an i64, so a
+            # numeric value is always microseconds.
             try:
-                return datetime.fromtimestamp(timestamp_value)
+                return datetime.fromtimestamp(timestamp_value / 1_000_000)
             except (ValueError, OSError) as e:
                 raise ValueError(
                     f"Failed to convert timestamp {timestamp_value} to datetime: {e}"
@@ -63,26 +62,13 @@ class InferenceMessage(ABC):
         )
 
     @property
-    def _binary_outputs(self):
-        if "BinaryOutputs" not in self._message or self._message["BinaryOutputs"] is None:
-            self._message["BinaryOutputs"] = []
-        return self._message["BinaryOutputs"]
+    def objects(self):
+        return self._msg.objects
 
     @property
-    def bboxes_xyxy(self):
-        if "BBoxes_xyxy" not in self._message or self._message["BBoxes_xyxy"] is None:
-            self._message["BBoxes_xyxy"] = {}
-        return self._message["BBoxes_xyxy"]
-
-    @property
-    def objects_metadata(self):
-        if "ObjectsMetaData" not in self._message or self._message["ObjectsMetaData"] is None:
-            self._message["ObjectsMetaData"] = {}
-        return self._message["ObjectsMetaData"]
-
-    @property
-    def inference_data(self):
-        return self._message.get("InferenceData")
+    def user_settings(self):
+        """Forwarded GUI settings map, read fresh from this message."""
+        return self._msg.user_settings
 
     @staticmethod
     def normalize_device_id(device_id) -> Optional[str]:
@@ -101,17 +87,7 @@ class InferenceMessage(ABC):
             return None
 
     @classmethod
-    def from_payload(cls, data):
-        try:
-            msg = msgpack.unpackb(data, raw=False, strict_map_key=False)
-        except Exception as e:
-            logger.error("Failed to unpack message: %s", e)
-            raise
-        logger.debug("Received message: %s", pformat(msg))
-        return msg
-
-    @classmethod
-    def create_from_bytes(cls, data: bytes) -> "InferenceMessage":
+    def create_from_bytes(cls, data: bytes) -> Optional["InferenceMessage"]:
         """
         Factory: parse bytes and return a typed message instance.
 
@@ -119,21 +95,12 @@ class InferenceMessage(ABC):
             data: MessagePack-encoded message bytes.
 
         Returns:
-            Typed message instance (DetectorMessage, CctOcrMessage, or GenericMessage).
+            Typed message instance (DetectorMessage or CctOcrMessage), or None if
+            ``data`` could not be parsed.
         """
         from message_processing_utils.general.detector import DetectorMessage
-        from message_processing_utils.anpr.ocr import CctOcrMessage
 
-        msg = cls.from_payload(data)
-        is_ocr = msg.get("OriginalObjectID") is not None and bool(
-            msg.get("BinaryOutputs", [])
-        )
-        is_detector = "BBoxes_xyxy" in msg
-        if is_detector:
-            return DetectorMessage(msg)
-        if is_ocr:
-            return CctOcrMessage(msg)
-        return GenericMessage(msg)
+        return parse_typed_message(data, DetectorMessage)
 
     @abstractmethod
     def handle(self, ocr_cache) -> None:
@@ -143,56 +110,117 @@ class InferenceMessage(ABC):
     @property
     def object_ids(self) -> list[str]:
         ids: list[str] = []
-        for meta in (self.objects_metadata or {}).values():
-            ids.extend(meta.get("ObjectIDs", []))
+        for objs in self._msg.objects.values():
+            for obj in objs:
+                if obj.track_id is not None:
+                    ids.append(obj.track_id)
         return ids
+
+    def find_object(self, object_id: str):
+        """Find the ObjectMetadata with the given track_id across all classes."""
+        if object_id is None:
+            return None
+        for objs in self._msg.objects.values():
+            for obj in objs:
+                if obj.track_id == object_id:
+                    return obj
+        return None
+
+    def update_original_object(self, class_name: str, attributes=None, remove_attributes=None):
+        """Edit the attributes of the object this chained-stage input was cropped from.
+
+        Only meaningful on a message from a model chained in Feature Extraction
+        mode, which carries the parent's track ID as ``OriginalObjectID`` but none
+        of its other fields. Adds an attribute-only entry for that ID under
+        ``class_name`` (merging into one already there), so the engine keeps the
+        object's bounding box and confidence and applies just ``attributes``
+        (set/overwrite) and ``remove_attributes`` (delete, applied after).
+
+        Returns:
+            The ObjectMetadata entry, or None if the message has no OriginalObjectID.
+        """
+        object_id = self.original_object_id
+        if not object_id:
+            return None
+        class_objects = self._msg.objects.setdefault(class_name, [])
+        obj = next((o for o in class_objects if o.track_id == object_id), None)
+        if obj is None:
+            obj = nxai_postprocessor_sdk.ObjectMetadata.attribute_update(object_id)
+            class_objects.append(obj)
+        for name, value in (attributes or {}).items():
+            obj.attributes[name] = value
+        for name in remove_attributes or []:
+            if name not in obj.remove_attributes:
+                obj.remove_attributes.append(name)
+        return obj
 
     def to_bytes(self):
         """Serialize to MessagePack"""
-        logger.debug("Sending message: %s", pformat(self._message))
-        return msgpack.packb(self._message, use_bin_type=True)
-
-    def _get_binary_output(self, name: str):
-        for output in self._binary_outputs:
-            if output.get("Name") == name:
-                return output
-        return None
+        return self._msg.to_bytes()
 
     def get_binary_output_f32(self, name: str):
-        output = self._get_binary_output(name)
-        if not output:
-            return None
-        data = output.get("Data")
-        if isinstance(data, list):
-            data = bytes(data)
-        if not isinstance(data, (bytes, bytearray)):
-            raise ValueError(f"BinaryOutputs[{name}].Data is not bytes")
-        return np.frombuffer(data, dtype=np.float32)
+        for tensor in self._raw_tensors:
+            if tensor.get("Name") != name:
+                continue
+            data = tensor.get("Data")
+            if isinstance(data, list):
+                data = bytes(data)
+            if not isinstance(data, (bytes, bytearray)):
+                raise ValueError(f"Tensors[{name}].Data is not bytes")
+            return np.frombuffer(data, dtype=np.float32)
+        return None
 
-    def add_event(self, event_id: str, caption: str, description: str) -> None:
+    def add_event(self, event_id: str, description: str) -> None:
         """
         Add an event to the message.
 
         Args:
             event_id: Unique identifier for the event (e.g., "speed.measurement").
-            caption: Short title for the event.
             description: Detailed description of the event.
         """
-        if "Events" not in self._message:
-            self._message["Events"] = []
-        self._message["Events"].append({
-            "ID": event_id,
-            "Caption": caption,
-            "Description": description,
-        })
+        event = nxai_postprocessor_sdk.EventMetadata()
+        event.type_id = event_id
+        event.description = description
+        self._msg.events.append(event)
 
 
 class GenericMessage(InferenceMessage):
     """Fallback for messages that were not classified."""
 
-    def __init__(self, message: dict):
-        super().__init__(message)
+    def __init__(self, sdk_message, raw_tensors=None):
+        super().__init__(sdk_message, raw_tensors)
 
     def handle(self, ocr_cache) -> None:
         logger.debug("Unknown message type, returning unchanged")
         return None
+
+
+def parse_typed_message(data: bytes, detector_cls) -> Optional[InferenceMessage]:
+    """Parse msgpack bytes into a ``detector_cls`` or ``CctOcrMessage`` instance.
+
+    Shared by ``InferenceMessage.create_from_bytes`` and the ANPR factory
+    (``message_processing_utils.anpr.create_anpr_message_from_bytes``): one
+    msgpack parse, one classification rule. Returns None (never a message
+    wrapping a None SDK message) if ``data`` is not parseable, so callers can
+    skip the message instead of crashing on it.
+
+    A message is routed to OCR only when it carries both a chained-stage
+    parent linkage (`original_object_id`) and a non-empty raw `Tensors` block
+    -- a chained message without tensors is still a detector message.
+    """
+    from message_processing_utils.anpr.ocr import CctOcrMessage
+
+    try:
+        raw_data = msgpack.unpackb(data, raw=False, strict_map_key=False)
+    except Exception:
+        return None
+    if not isinstance(raw_data, dict):
+        return None
+    raw_tensors = raw_data.get("Tensors", [])
+
+    sdk_msg = nxai_postprocessor_sdk.ObjectsPostProcessorMessage.from_dict(raw_data)
+    if sdk_msg is None:
+        return None
+    if sdk_msg.original_object_id is not None and raw_tensors:
+        return CctOcrMessage(sdk_msg, raw_tensors)
+    return detector_cls(sdk_msg, raw_tensors)

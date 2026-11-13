@@ -1,42 +1,74 @@
-Edge Impulse Image Uploader
-===========================
+# Postprocessor Edge Impulse Image Uploader Example
 
-This example application uses a Python based postprocessor to upload images to Edge Impulse for training, either interval based with the auto uploader, or based on an inference confidence threshold.
+A v5 post-processor that collects training data: it uploads frames to an Edge Impulse
+project as samples, either on a fixed interval or whenever the frame holds a detection the
+model was unsure about. Fire-and-forget — it returns nothing to the AI Manager.
 
-# Requirements
+## What it does
 
-For this example to work, you can use any model.
+`handle_message` decides whether the frame is worth keeping, and queues it as JPEG bytes if
+it is:
 
-You also need an Edge Impulse account at https://edgeimpulse.com/.
+```python
+if not (_sample_is_due() if auto_generator else _has_uncertain_detection(msg)):
+    logger.debug("skipping sample")
+    return
 
-Edge Impulse usage charges may apply, but it is possible to use the free tier to test this.
-
-# How to use
-
-## Download the integration SDK
-
-You probably have the integration SDK already if you're looking at this readme, the command to get the full integration SDK is as follows:
-
-```shell
-git clone https://github.com/scailable/sclbl-integration-sdk.git --recurse-submodules
+logger.debug("uploading sample")
+samples_buffer.append(_jpeg_from_frame(msg.image_data))
 ```
 
-If you have downloaded the sdk previously, you can also update to the latest version of the integration SDK while in the directory of the downloaded git repository.
+On the threshold path, `_has_uncertain_detection` is true for any detection that scores
+below `p_value` (`obj.confidence < p_value`). The comparison is `<` on purpose: the samples worth training on are the *uncertain* ones.
+With `auto_generator` on, the score is ignored and one frame is queued every
+`auto_generator_every_seconds` instead. Queued frames are uploaded in one batch once the
+buffer reaches `samples_buffer_flush_size`.
 
-```shell
-git pull --recurse-submodules
-```
+## Behavior change from v4
 
-## Configuration of example postprocessor
+- v4 ran on `Schedule: TENSOR` (`ReceiveInputTensor` in the old JSON) and hand-unpacked the
+  model's output tensor with `struct` to reach every detection's score, reading every sixth
+  element starting at index 4. A v5 TENSOR-schedule message carries no `ImageData` and can
+  never have one, while this processor needs the score *and* the frame it uploads, so it
+  runs on `Schedule: OBJECTS` with `ReceiveInputImage: true` and reads the score off the
+  decoded objects' `confidence`. That value is bit-for-bit the one the tensor row carried,
+  so `ReceiveBinaryData` would buy nothing and only carry a model-specific tensor layout
+  into v5.
+- One consequence: the score now arrives via the tracker rather than raw from the model, so
+  a detection on a not-yet-warmed-up first frame may be missed. Harmless for an uploader
+  whose job is "collect frames like this one".
+- v4 received the frame via a second image-header message plus a raw shared-memory read
+  (`SHMKey`, `nxai_communication_utils.SharedMemory`); v5 delivers it inline as the root
+  `ImageData` block on the same message. That block is uint8 RGB, which the code
+  encodes as a JPEG.
+- v4 read its ini from `plugin.cloud-edgeimpulse.ini` while its own example file and README
+  said `plugin.edgeimpulse.ini`. The code now reads the documented name.
+- v4 logged to `plugin.cloud-edgeimpulse.log` next to the ini; the processor now logs to
+  stdout, which the AI Manager captures at the entry's `LogFilepath`.
+- `auto_generator` is read as a boolean. In v4 it came back as a bare string, so
+  `auto_generator = False` was truthy and silently kept the timer running.
 
-Create a new [configuration file](plugin.edgeimpulse.ini.example) at `/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/etc/plugin.edgeimpulse.ini` and add your Edge Impulse API key as well as any overrides of the following settings.
+## Requirements
+
+Any model will do. You also need an Edge Impulse account at https://edgeimpulse.com/ —
+usage charges may apply, though the free tier is enough to try this out.
+
+Create the configuration file as `etc/plugin.edgeimpulse.ini` in the directory one level
+above the directory of the processor binary. The processor derives the path from the
+location of the binary. For an NX Meta install on Linux, this is
+`/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/etc/plugin.edgeimpulse.ini`.
+NX Witness uses the root `/opt/networkoptix` instead. On Windows the root is the
+mediaserver profile and the path is `nx_ai_manager\etc\plugin.edgeimpulse.ini` below it
+(see [plugin.edgeimpulse.ini.example](plugin.edgeimpulse.ini.example)) and put your
+project's API key in it — from Edge Impulse Studio, under "Dashboard > Keys", with no
+quotes around it. The processor exits at startup while the key is unset.
 
 ```ini
 [common]
 debug_level=INFO
 [edgeimpulse]
 # Add your own project level Edge Impulse API key
-api_key = ei_add_your_key_here
+api_key = ei_your_key_here
 # Option autogenerate images every x seconds as an alternative to sending based on p_value
 auto_generator = True
 # If auto_generator True, every how many seconds upload an image?
@@ -47,191 +79,66 @@ samples_buffer_flush_size = 20
 p_value = 0.4
 ```
 
-Before building this postprocessor you need to enter your API key for the Edge Impulse Project.
+The settings stayed in the ini rather than moving to the registration entry's `Config`:
+this is a behavior-preserving port. The one exception is *where* the ini lives — the
+`Config` key `config_file` overrides the default path above, for a caller that installs
+the processor somewhere it cannot predict.
 
-Replace the key in `api_key` with your own key, you can get your key in Edge Impulse Studio from the "Dashboard > Keys" page. Don't use quotes around the key in the configuration file.
+## Registration
 
-## Use the interval based upload
+Add the processor to `external_postprocessors.json` (see the colocated
+`external_postprocessors.json` and `.claude/docs/external_postprocessors_json.md`):
 
-When the `auto_generator` is set to `True` images will be uploaded according to the value in `auto_generator_every_seconds`
-
-## Use the confidence threshold based upload
-
-When the `auto_generator` is set to `False` images will be uploaded according to the value in `p_value`
-
-## Preparation of dependencies
-
-Install the needed dependencies
-
-```shell
-sudo apt install cmake
-sudo apt install g++
-sudo apt install python3-pip
-sudo apt install patchelf
-```
-
-Change into the directory created for the project if you're not already there.
-
-```shell
-cd nxai-integration-sdk/
-```
-
-Prepare the *build* directory in the project directory, and switch to the build directory.
-
-```shell
-mkdir -p build
-cd build
-```
-
-Set up a python virtual environment in the newly created build directory (on recent ubuntu servers this is required).
-
-```shell
-python3 -m venv integrationsdk
-source integrationsdk/bin/activate
-```
-
-## (optionally) Remove other postprocessors for compilation
-
-Edit the `CMakelist.txt` to disable all but the external postprocessor.
-
-```shell
-nano ../CMakeLists.txt
-```
-
-It should look similar to this
-
-```shell
-cmake_minimum_required(VERSION 3.10.2)
-
-project(sclbl-integration-examples)
-
-# Add Scailable C Utilities for all subprojects
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/sclbl-utilities)
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/sclbl-utilities/include)
-
-# Add Edge Impulse Postprocessor Python project
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/postprocessor-python-edgeimpulse-example)
-
-# Add installation option
-install(TARGETS
-    DESTINATION /opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors/
-)
-install(PROGRAMS
-    ${CMAKE_CURRENT_BINARY_DIR}/postprocessor-python-edgeimpulse-example/postprocessor-python-edgeimpulse-example
-    DESTINATION /opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors/
-)
-```
-
-## Compile the postprocessor
-
-Build the postprocessor, while in the created *build* directory. This may take a while, depending on the speed of your system.
-
-```shell
-cmake ..
-make
-```
-
-## Install the postprocessor
-
-Once compiled, copy the executable to an accessible directory.
-
-A convenience directory within the AI Manager installation is created for this purpose at `/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors`.
-
-The application and settings files you add must be readable and executable by the NX AI AI Manager. This can be achieved by running:
-
-```
-sudo chmod -R 777 /opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors
-```
-
-Install the postprocessor automatically with the cmake command, also from within the *build* directory.
-
-```shell
-cmake --build . --target install
-```
-
-## Defining the postprocessor
-
-To make the postprocessor available in the NX Server another configuration must be added.
-
-Create a configuration file at
-```
-/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors/external_postprocessors.json
-```
-for Linux, or
-```
-C:\Windows\System32\config\systemprofile\AppData\Local\Network Optix\Network Optix MetaVMS Media Server\nx_ai_manager\nxai_manager\postprocessors\external_postprocessors.json
-```
-for Windows, and add the details of your postprocessor to the root object of that file. For example: 
-
-``` json
-{
-    "externalPostprocessors": [
-        {
-            "Name":"Example-Postprocessor-EdgeImpulse",
-            "Command":"/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors/postprocessor-python-edgeimpulse-example",
-            "SocketPath":"/tmp/python-edgeimpulse-postprocessor.sock",
-            "ReceiveInputTensor": true,
-            "RunLast": false,
-            "NoResponse": true
-        }
-    ]
-}
-```
-For Linux, and
 ```json
 {
-    "externalPostprocessors": [
-        {
-            "Name":"Example-Postprocessor-EdgeImpulse",
-            "Command":"C:\\Windows\\System32\\config\\systemprofile\\AppData\\Local\\Network Optix\\Network Optix MetaVMS Media Server\\nx_ai_manager\\nxai_manager\\postprocessors\\postprocessor-python-edgeimpulse-example.exe",
-            "SocketPath":"C:\\Windows\\Temp\\python-edgeimpulse-postprocessor.sock",
-            "ReceiveInputTensor": true,
-            "RunLast": false,
-            "NoResponse": true
-            
-        }
-    ]
+    "Name": "EdgeImpulse",
+    "Command": "/path/to/build/postprocessor-python-edgeimpulse-example/postprocessor-python-edgeimpulse-example",
+    "Schedule": "OBJECTS",
+    "LogFilepath": "/tmp/postprocess.edgeimpulse.stdout.log",
+    "ReceiveInputImage": true,
+    "NoResponse": true,
+    "Config": {
+        "LogLevel": "DEBUG"
+    }
 }
 ```
-For Windows.
 
-This tells the AI Manager about the postprocessor:
+Key points:
 
-- **Name** gives the postprocesor a name so it can be selected later
-- **Command** defines how to start the postprocessor
-- **SocketPath** tells the AI Manager where to send data to so the external postprocessor will receive it
-- **ReceiveInputTensor** tells the AI Manager if this postprocessor expects information to access the raw input tensor data
-- **Runlast** indicates when the postprocessor is run. When 'RunLast' is set to false, the external post-processor runs immediately after the model's inference. This means the raw data sent to the post-processor includes the output tensors' names, data, shapes, and data types. If 'RunLast' is set to true or left out, the external post-processor runs later, after the built-in post-processors. In this scenario, the data sent to the external post-processor is already processed, including output scores and bounding boxes (if applicable), scaled to match the original image dimensions rather than the model's processed image.
-- **NoResponse** tells the AI Manager to not wait for a response from this postprocessor
+- `Schedule: "OBJECTS"` — the processor runs on inference-results messages, which is where
+  both the detections' `confidence` and (with the flag below) the frame arrive.
+- `ReceiveInputImage: true` — the engine attaches the frame as root `ImageData`; without it
+  `msg.image_data` stays `None` and there is nothing to upload.
+- `NoResponse: true` — the AI Manager does not wait for output. The processor must not
+  reply on any path: the `NoResponse` path has no return channel at all, and a processor
+  that answers anyway dies on its first frame.
+- No `Objects` entry is needed: the processor adds no class of its own.
+- `Config.config_file` (optional) — an absolute path to the ini, for an installation that
+  cannot use the default location. Without it the processor reads
+  `../etc/plugin.edgeimpulse.ini`, relative to the directory of the binary.
 
-The socket path is always given as the first command line argument when the application is started. It is therefore best practice for the external postprocessor application to read its socket path from here, instead of defining the data twice.
-
-## Restarting the server
-
-Finally, to (re)load your new postprocessor, make sure to restart the NX Server with:
-
-```shell
-sudo service networkoptix-metavms-mediaserver restart
-```
-
-You also want to make sure the postprocessor can be used by the NX AI Manager (this is the mostly same command as earlier)
+## Build, test, install
 
 ```shell
-sudo chmod -R a+x /opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors/
+mkdir -p build && cd build
+cmake ..
+cmake --build . --target postprocessor-python-edgeimpulse-example
+cmake --install . --component postprocessor-python-edgeimpulse-example
 ```
 
-## Selecting to the postprocessor
+Run the colocated unit tests (the Edge Impulse boundary is mocked; no live call is made):
 
-If the postprocessor is defined correctly, its name should appear in the list of postprocessors in the NX Plugin settings. If it is selected in the plugin settings then the Edge AI Runtime will send data to the postprocessor and wait for its output.
+```shell
+cd postprocessor-python-edgeimpulse-example
+PYTHONPATH=../nxai-utilities python -m unittest test_postprocessor_python_edgeimpulse_example -v
+```
 
 ## Output logging
 
-There is an output log where the uploads can be tracked in real time from the server.
-
 ```shell
-tail -f /opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/etc/plugin.edgeimpulse.log
+tail -f /tmp/postprocess.edgeimpulse.stdout.log
 ```
 
-# Licence
+## Licence
 
-Copyright 2025, Network Optix, All rights reserved.
+Copyright 2026, Network Optix, All rights reserved.

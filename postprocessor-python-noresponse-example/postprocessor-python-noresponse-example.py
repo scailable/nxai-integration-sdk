@@ -1,127 +1,126 @@
-import os
+"""
+Example NXAI postprocessor that never responds.
+
+This postprocessor receives detected objects and events from the NXAI
+runtime, logs them, and returns nothing: it is fire-and-forget. The
+colocated `external_postprocessors.json` sets `"NoResponse": true` so the
+AI Manager does not wait for output after sending the message.
+
+Configuration:
+  - Logs: written to stdout/stderr; the AI Manager writes them to the entry's LogFilepath
+  - Config: the Config keys of the registration entry, passed as launch arguments
+"""
+
 import sys
 import logging
-import configparser
-from pprint import pformat
+import nxai_postprocessor_sdk
 
-# Add the nxai-utilities python utilities
-script_location = os.path.dirname(sys.argv[0])
-sys.path.append(os.path.join(script_location, "../nxai-utilities/python-utilities"))
-import nxai_communication_utils
+# ============================================================================
+# Configuration
+# ============================================================================
 
+# Module-level logger
+logger = logging.getLogger(__name__)
 
-CONFIG_FILE = os.path.join(script_location, "..", "etc", "plugin.noresponse.ini")
+PROCESSOR_NAME = "noresponse-example"
 
-LOG_FILE = os.path.join(script_location, "..", "etc", "plugin.noresponse.log")
-
-
-# Initialize plugin and logging, script makes use of INFO and DEBUG levels
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - noresponse - %(message)s",
-    filename=LOG_FILE,
-    filemode="w",
-)
-
-# The name of the postprocessor.
-# This is used to match the definition of the postprocessor with routing.
-Postprocessor_Name = "Python-NoResponse-Postprocessor"
-
-# The socket this postprocessor will listen on.
-# This is always given as the first argument when the process is started
-# But it can be manually defined as well, as long as it is the same as the socket path in the runtime settings
-import tempfile
-Postprocessor_Socket_Path = os.path.join(tempfile.gettempdir(),"python-noresponse-postprocessor.sock")
-
-# Data Types
-# 1:  //FLOAT
-# 2:  //UINT8
-# 3:  //INT8
-# 4:  //UINT16
-# 5:  //INT16
-# 6:  //INT32
-# 7:  //INT64
-# 8:  //STRING
-# 9:  //BOOL
-# 11: //DOUBLE
-# 12: //UINT32
-# 13: //UINT64
+# ============================================================================
+# Business Logic
+# ============================================================================
 
 
-def config():
-    logger.info("Reading configuration from:" + CONFIG_FILE)
+def handle_message(msg: nxai_postprocessor_sdk.ObjectsPostProcessorMessage) -> None:
+    """Log a received message. Returns nothing: this processor never responds.
 
-    try:
-        configuration = configparser.ConfigParser()
-        configuration.read(CONFIG_FILE)
+    Args:
+        msg: Parsed ObjectsPostProcessorMessage from NXAI runtime
+    """
 
-        configured_log_level = configuration.get("common", "debug_level", fallback="INFO")
-        set_log_level(configured_log_level)
-
-        for section in configuration.sections():
-            logger.info("config section: " + section)
-            for key in configuration[section]:
-                logger.info("config key: " + key + " = " + configuration[section][key])
-
-    except Exception as e:
-        logger.error(e, exc_info=True)
-
-    logger.debug("Read configuration done")
+    logger.info(
+        f"Processing: device={msg.device_id}, "
+        f"{len(msg.objects)} object classes, {len(msg.events)} events"
+    )
+    logger.debug(f"Device: {msg.device_name}, Timestamp: {msg.timestamp}")
+    logger.debug(f"Objects: {msg.objects}")
+    logger.debug(f"Events: {msg.events}")
 
 
-def set_log_level(level):
-    try:
-        logger.setLevel(level)
-    except Exception as e:
-        logger.error(e, exc_info=True)
+def run_message_loop(processor: nxai_postprocessor_sdk.ExternalPostprocessor) -> None:
+    """Serve messages until the engine sends a graceful EXIT signal.
 
+    `wait_for_message()` returns None both on a plain timeout and on an IPC EXIT
+    signal; only `processor.exit_requested` tells them apart. A loop that just
+    `continue`s on None regardless of that flag never returns, and the AI Manager
+    kills the process after its grace period instead of it exiting cleanly.
 
-def main():
-    # Start socket listener to receive messages from NXAI runtime
-    server = nxai_communication_utils.SocketListener(Postprocessor_Socket_Path)
-
-    logger.debug("Starting main" + str(Postprocessor_Socket_Path))
-    # Wait for messages in a loop
+    Args:
+        processor: An initialized ExternalPostprocessor.
+    """
     while True:
-        # Wait for input message from runtime
-        logger.debug("Starting loop")
+        logger.debug("Waiting for input message")
 
         try:
-            input_message, connection = server.accept()
-            logger.debug("Received input message")
-            formatted_input_message = pformat(input_message)
-            logger.debug(f"Input message: :\n\n{formatted_input_message}\n\n")
-        except nxai_communication_utils.SocketTimeout:
-            # Request timed out. Continue waiting
-            continue
+            message_bytes = processor.wait_for_message(timeout_ms=5000)
 
-        # Parse input message
-        input_object = nxai_communication_utils.parseInferenceResults(input_message)
-        if isinstance(input_object, nxai_communication_utils.ExitSignal):
-            logger.info("Received exit signal.")
-            connection.close()
+            if message_bytes is None:
+                if processor.exit_requested:
+                    logger.info("Received graceful exit signal, shutting down")
+                    return
+                logger.debug("Timeout waiting for message")
+                continue
+
+            logger.debug(f"Received message ({len(message_bytes)} bytes)")
+
+            # Parse msgpack message into ObjectsPostProcessorMessage
+            objects_message = processor.parse_objects_message(message_bytes)
+            if objects_message is None:
+                logger.error("Failed to parse message")
+                continue
+
+            # Fire-and-forget: perform the side effect and end the loop
+            # here. No write_objects_message/send_response call - the AI
+            # Manager is configured with "NoResponse": true and does not
+            # wait for one.
+            handle_message(objects_message)
+
+        except Exception as e:
+            logger.error(f"Error processing message: {e}", exc_info=True)
             break
 
-        formatted_unpacked_object = pformat(input_object)
-        logging.info(f"Unpacked object:\n\n{formatted_unpacked_object}\n\n")
+
+# ============================================================================
+# Main Entry Point
+# ============================================================================
 
 
 if __name__ == "__main__":
-    ## initialize the logger
-    logger = logging.getLogger(__name__)
+    # Set up logging using SDK utility
+    logger = nxai_postprocessor_sdk.setup_logging()
 
-    ## read configuration file if it's available
-    config()
+    # Load configuration using SDK utility
+    processor_config = nxai_postprocessor_sdk.load_config(sys.argv)
 
-    logger.info("Initializing noresponse plugin")
-    logger.debug("Input parameters: " + str(sys.argv))
+    # Apply logging configuration if available
+    nxai_postprocessor_sdk.apply_config_logging(processor_config, logger)
 
-    # Parse input arguments
-    if len(sys.argv) > 1:
-        Postprocessor_Socket_Path = sys.argv[1]
+    # Log startup information
+    logger.info(f"Initializing '{processor_config.get('ProcessorName', PROCESSOR_NAME)}' postprocessor")
+    logger.debug(f"Command-line arguments: {sys.argv}")
 
-    # Start program
+    # Initialize ExternalPostprocessor from command-line arguments
+    processor = nxai_postprocessor_sdk.ExternalPostprocessor()
+    if not processor.initialize_from_args():
+        logger.error("Failed to initialize postprocessor from arguments")
+        sys.exit(1)
+
+    logger.info(f"Postprocessor '{processor.name}' initialized successfully")
+    logger.info("Waiting for messages from NXAI runtime...")
+
     try:
-        main()
+        run_message_loop(processor)
+    except KeyboardInterrupt:
+        logger.info("Exited with keyboard interrupt")
     except Exception as e:
-        logger.error(e, exc_info=True)
+        logger.error(f"Fatal error: {e}", exc_info=True)
+    finally:
+        logger.info("Postprocessor shutdown")

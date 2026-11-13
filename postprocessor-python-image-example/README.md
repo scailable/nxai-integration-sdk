@@ -1,305 +1,123 @@
-Postprocessor Python Image Example
-=========================
+# Postprocessor Python Image Example
 
-This example application provides an example on how to create a Python based postprocessor that can be integrated with the NXAI AI Manager.
+A v5 post-processor that reads the input frame, decodes it with Pillow, injects a
+"python_image_example" detection recording whether it decoded cleanly, and serves the
+decoded frame as a live MJPEG preview you can watch in a browser.
 
-# Postprocessors Control Flow
+## What it does
 
-The normal control flow of a postprocessor is to receive a MessagePack binary message representing the inference results from the NXAI AI Manager, and return the same or an altered version of the received MessagePack message.
+`handle_message` decodes the raw frame delivered at `msg.image_data` into a Pillow
+image, publishes it to an in-process MJPEG stream, and injects a single detection
+recording the decode result:
 
-This example will show how to access the input tensor which the inference results were generated from for additional analysis or presentation. It is possible to define the postprocessor indicating that the Edge AI Runtime should send additional information to allow the postprocessor to access the input tensor. If this setting is enabled, the AI Manager will send an additional messagePack message after the inference results messages containing the relevant fields. The postprocessor should therefore expect two messages before responding.
+```python
+obj = nxai_postprocessor_sdk.ObjectMetadata()
+obj.x, obj.y, obj.width, obj.height = 0.1, 0.1, 0.1, 0.1
+obj.confidence = 1.0
+obj.attributes["ImageDecodeOk"] = str(decode_error is None)
+if decode_error is not None:
+    obj.attributes["ImageDecodeError"] = decode_error
+msg.objects["python_image_example"] = [obj]
+```
 
-An external postprocessor can parse the incoming MessagePack message, do analysis, optionally alter it, and return it. The alterations made by an external postprocessor will be kept and sent to the Network Optix server to be represented as bounding boxes or events.
+If the decode fails, the object also carries the error message in `ImageDecodeError`.
+The object keeps one track UUID for each device: the first frame of a device creates
+the track with `new_track_id`, and later frames continue it with `track_id`.
 
-An external postprocessor is a standalone application which is expected to receive these MessagePack messages and return a MessagePack message with a compatible format. Instructions can be added to a configuration file to handle executing and terminating the application.
+`msg.image_data` carries raw pixel data, not an encoded image, so there's nothing to
+"parse" that would fail the way a corrupt JPEG does. This example reads it as
+**uint8 RGB** (1 byte per channel).
 
-Only one external processor is started for all devices. This means that a single processor can combine data for multiple devices for deeper analysis.
+What `_decode_frame` actually catches is a buffer whose size doesn't match
+`height x width x 3` elements — a truncated or misaligned frame that a plain byte-sum
+check (the v4-ported version this example replaces) accepted silently, since a sum is
+identical whether the bytes that are there form a valid frame or not. Corruption that
+keeps the right size but scrambles pixels (swapped channels, shifted rows) isn't wrong
+by any number; that's what the preview stream is for — watch it and the visual
+artifact is immediately obvious.
 
-# MessagePack schema
+### Watching the preview stream
 
-The incoming MessagePack message follows a specific schema. If the message is altered, the returned message must follow the same schema. In Json, this schema would look like:
+On startup the process logs a URL:
+
+```
+Image preview stream: http://127.0.0.1:<port>/ (open in a browser to watch frames live)
+```
+
+Open it in any browser. The response is a `multipart/x-mixed-replace` MJPEG stream —
+every mainstream browser renders it as a live-updating image natively, with no plugin
+and no polling. The latest decoded frame is kept in memory and JPEG-encoded on
+publish; nothing is ever written to disk, which is what keeps this viable at
+frame rate (writing one file per frame would mean thousands of files a minute and no
+way to just watch the feed update). The implementation is stdlib `http.server` plus
+Pillow, so it behaves identically on Windows and Linux. It binds to `127.0.0.1` only —
+loopback, not exposed on the network — and the port is OS-assigned by default; pin it
+with the `stream_port` Config key for a stable URL across restarts.
+
+## Behavior change from v4
+
+- v4 received the frame via a second image-header message plus a
+  shared-memory read (`SHMKEY`); v5 delivers it inline as the root `ImageData`
+  block on the same message, gated by `ReceiveInputImage` — no second message,
+  no SHM.
+- v4 injected a pixel xyxy box (`BBoxes_xyxy["test"] = [100, 100, 200, 200]`)
+  and a parallel `Counts["ImageBytesCumulative"]`; v5 objects are
+  frame-relative, so the box is normalized xywh and the decode result is a
+  per-object `attributes` entry instead (v5 has no `Counts`).
+
+## Registration
+
+Add the processor to `external_postprocessors.json` (see the colocated
+`external_postprocessors.json` and `.claude/docs/external_postprocessors_json.md`):
 
 ```json
 {
-    "DeviceID": "<Device ID>",
-    "DeviceName": "<Device Name>",
-    "Timestamp": <Timestamp>,
-    "InputIndex": <Index>,
-    "Width": <Width>,
-    "Height": <Height>,
-    "BBoxes_xyxy": {
-        "<Class Name>": [<Float Coordinates>]
-        },
-    "ObjectsMetaData": {
-        <"Class Name">: {
-            "ObjectIDs": [
-                <16-byte UUID>,
-                <16-byte UUID>
-            ],
-            "AttributeKeys": [
-                [<Attribute Key>,<Attribute Key>],
-                [<Attribute Key>,<Attribute Key>]
-            ],
-            "AttributeValues": [
-                [<Attribute Value>,<Attribute Value>],
-                [<Attribute Value>,<Attribute Value>]
-            ]
+    "Name": "Image-Example",
+    "Command": "/path/to/build/postprocessor-python-image-example/postprocessor-python-image-example",
+    "Schedule": "OBJECTS",
+    "LogFilepath": "/tmp/postprocess.image-example.stdout.log",
+    "ReceiveInputImage": true,
+    "Objects": [
+        {
+            "ID": "python_image_example",
+            "Name": "Python Image Example"
         }
-    },
-    "Scores": {
-        <"Class Name"> : <Score>
-    },
-    "ExternalProcessorSettings": {}
-}
- ```
-
-Some fields depend on which model is assigned. If a model outputs bounding boxes, the `BBoxes_xyxy` field will be present. If a model outputs scores, the `Scores` field will be present.
-
-The image header message contains fields indicating information about the image dimensions and information to access this data:
-
-```json
-{
-    "Width": <Width>,
-    "Height": <Height>,
-    "Channels": <Channels>,
-    "SHMKEY": <SHM Key>
+    ],
+    "Config": {
+        "LogLevel": "DEBUG"
+    }
 }
 ```
 
-A convenience example function is provided showing how to use this data to access the original tensor data in shared memory.
+Key points:
 
-# Requirements
+- `Schedule: "OBJECTS"` — the processor runs on inference-results messages.
+- `ReceiveInputImage: true` — the engine attaches the frame as root
+  `ImageData` on every message; without it `msg.image_data` stays `None`.
+- `Objects` declares the injected `python_image_example` class — an undeclared
+  class is silently dropped by the UI.
+- `Config` delivers launch-time configuration: `LogLevel`, plus the optional
+  `stream_port` to pin the preview server to a fixed port instead of an
+  OS-assigned one.
 
-For this example to work, you can use any model.
+## Build, test, install
 
-# How to use
-
-## Download the integration SDK
-
-You probably have the integration SDK already if you're looking at this readme, the command to get the full integration SDK is as follows:
-
-```shell
-git clone https://github.com/scailable/sclbl-integration-sdk.git --recurse-submodules
-```
-
-If you have downloaded the sdk previously, you can also update to the latest version of the integration SDK while in the directory of the downloaded git repository.
+Build via the CMake tree:
 
 ```shell
-git pull --recurse-submodules
-```
-
-## Configuration of example postprocessor
-
-Create a [configuration file](plugin.image.ini.example) at `/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/etc/plugin.image.ini` and add some overrides for the configuration.
-
-This plugin only supports changing the debug level between DEBUG, INFO, WARNING, ERROR and CRITICAL
-
-For example:
-
-```ini
-[common]
-debug_level=DEBUG
-```
-
-## Preparation of dependencies
-
-Install the needed dependencies
-
-On Linux:
-
-```shell
-sudo apt install cmake
-sudo apt install g++
-sudo apt install python3-pip
-sudo apt install patchelf
-```
-
-On Windows:
-
-```
-Python 3.10+
-Visual Studio 2022 with Desktop development with C++ workload
-```
-Enable the following options in Visual Studio:
-```
-MSVC v143
-Windows 10/11 SDK
-CMake tools for Windows
-```
-
-
-Change into the directory created for the project if you're not already there.
-
-```shell
-cd nxai-integration-sdk/
-```
-
-Prepare the *build* directory in the project directory, and switch to the build directory.
-
-```shell
-mkdir -p build
-cd build
-```
-
-Set up a python virtual environment in the newly created build directory (on recent ubuntu servers this is required).
-
-```shell
-python3 -m venv integrationsdk
-source integrationsdk/bin/activate
-```
-
-## (optionally) Remove other postprocessors for compilation
-
-Edit the `CMakelist.txt` to disable all but the external postprocessor.
-
-```shell
-nano ../CMakeLists.txt
-```
-
-It should look similar to this
-
-```shell
-cmake_minimum_required(VERSION 3.10.2)
-
-project(sclbl-integration-examples)
-
-# Add Scailable C Utilities for all subprojects
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/nxai-utilities)
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/nxai-utilities/include)
-
-# Add Image Postprocessor Python project
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/postprocessor-python-image-example)
-
-# Add installation option
-install(TARGETS
-    DESTINATION /opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors/
-)
-install(PROGRAMS
-    ${CMAKE_CURRENT_BINARY_DIR}/postprocessor-python-image-example/postprocessor-python-image-example
-    DESTINATION /opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors/
-)
-```
-
-## Compile the postprocessor
-
-Build the postprocessor, while in the created *build* directory. This may take a while, depending on the speed of your system.
-
-On Linux:
-
-```shell
+mkdir -p build && cd build
 cmake ..
-make
+cmake --build . --target postprocessor-python-image-example
+cmake --install . --component postprocessor-python-image-example
 ```
-On Windows:
+
+Run the colocated unit tests:
 
 ```shell
-cmake .. -G "Visual Studio 17 2022" -A x64
-cmake --build . --config Release
+cd postprocessor-python-image-example
+PYTHONPATH=../nxai-utilities python -m unittest test_postprocessor_python_image_example -v
 ```
 
-## Install the postprocessor
+## Licence
 
-Once compiled, copy the executable to an accessible directory.
-
-A convenience directory within the AI Manager installation is created for this purpose at `/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors`.
-
-The application and settings files you add must be readable and executable by the NX AI AI Manager. This can be achieved by running:
-
-```
-sudo chmod -R 777 /opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors
-```
-
-Install the postprocessor automatically with the cmake command, also from within the *build* directory.
-
-```shell
-cmake --build . --target install
-```
-
-## Defining the postprocessor
-
-Create a configuration file at
-```
-/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors/external_postprocessors.json
-```
-for Linux, or
-```
-C:\Windows\System32\config\systemprofile\AppData\Local\Network Optix\Network Optix MetaVMS Media Server\nx_ai_manager\nxai_manager\postprocessors\external_postprocessors.json
-```
-for Windows, and add the details of your postprocessor to the root object of that file. For example: 
-
-``` json
-{
-    "externalPostprocessors": [
-        {
-            "Name":"Python-Image-Postprocessor",
-            "Command":"/opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors/postprocessor-python-image-example",
-            "SocketPath":"/tmp/python-image-postprocessor.sock",
-            "ReceiveInputTensor": true,
-            "Objects": [
-                {
-                    "ID":"test",
-                    "Name":"Test"
-                }
-            ]
-        }
-    ]
-}
-```
-For Linux, and
-```json
-{
-    "externalPostprocessors": [
-        {
-            "Name":"Python-Image-Postprocessor",
-            "Command":"C:\\Windows\\System32\\config\\systemprofile\\AppData\\Local\\Network Optix\\Network Optix MetaVMS Media Server\\nx_ai_manager\\nxai_manager\\postprocessors\\postprocessor-python-image-example.exe",
-            "SocketPath":"C:\\Windows\\Temp\\python-image-postprocessor.sock",
-            "ReceiveInputTensor": true,
-            "Objects": [
-                {
-                    "ID":"test",
-                    "Name":"Test"
-                }
-            ]
-        }
-    ]
-}
-```
-For Windows.
-
-This tells the AI Manager about the postprocessor:
-- **Name** gives the postprocesor a name so it can be selected later
-- **Command** defines how to start the postprocessor
-- **SocketPath** tells the AI Manager where to send data to so the external postprocessor will receive it
-- **ReceiveInputTensor** tells the AI Manager if this postprocessor expects information to access the raw input tensor data
-
-The socket path is always given as the first command line argument when the application is started. It is therefore best practice for the external postprocessor application to read its socket path from here, instead of defining the data twice.
-
-## Restarting the server
-
-Finally, to (re)load your new postprocessor, make sure to restart the NX Server with:
-
-```shell
-sudo service networkoptix-metavms-mediaserver restart
-```
-
-You also want to make sure the postprocessor can be used by the NX AI Manager (this is the mostly same command as earlier)
-
-```shell
-sudo chmod -R a+x /opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/postprocessors/
-```
-
-## Selecting to the postprocessor
-
-If the postprocessor is defined correctly, its name should appear in the list of postprocessors in the NX Plugin settings. If it is selected in the plugin settings then the Edge AI Runtime will send data to the postprocessor and wait for its output.
-
-## Output logging
-
-There is an output log where the uploads can be tracked in real time from the server.
-
-```shell
-tail -f /opt/networkoptix-metavms/mediaserver/var/nx_ai_manager/nxai_manager/etc/plugin.image.log
-```
-
-# Licence
-
-Copyright 2025, Network Optix, All rights reserved.
+Copyright 2026, Network Optix, All rights reserved.

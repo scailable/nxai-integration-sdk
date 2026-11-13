@@ -1,0 +1,33 @@
+[
+    {
+        "Name": "Person-Height-Estimator",
+        "Command": "/path/to/build/postprocessor-python-height-estimator/postprocessor-python-height-estimator",
+        "Schedule": "OBJECTS",
+        "LogFilepath": "/tmp/postprocess.height-estimator.stdout.log",
+        "Config": {
+            "LogLevel": "DEBUG"
+        },
+        "UserSettings": [
+            {
+                "type": "DoubleSpinBox",
+                "name": "frame_fraction_per_meter",
+                "caption": "Frame Fraction Per Meter",
+                "description": "Fraction of the frame height that spans 1 metre in this camera view",
+                "defaultValue": 0.25
+            },
+            {
+                "type": "SpinBox",
+                "name": "max_height_cm",
+                "caption": "Max Height (cm)",
+                "description": "Fire the height-exceeded event when an estimated person height exceeds this value",
+                "defaultValue": 250
+            }
+        ],
+        "Events": [
+            {
+                "ID": "person.height.exceeded",
+                "Name": "Person height exceeded"
+            }
+        ]
+    }
+]

@@ -1,0 +1,30 @@
+[
+    {
+        "Name": "ANPR-Example",
+        "Command": "/path/to/build/postprocessor-python-anpr-example/postprocessor-python-anpr-example",
+        "Schedule": "OBJECTS",
+        "ReceiveBinaryData": true,
+        "LogFilepath": "/tmp/postprocess.anpr-example.stdout.log",
+        "Config": {
+            "LogLevel": "DEBUG",
+            "ocr_output_name": "Identity:0",
+            "cache_ttl_sec": "300",
+            "plate_class_name": "LP"
+        },
+        "UserSettings": [
+            {
+                "type": "DoubleSpinBox",
+                "name": "min_confidence",
+                "caption": "Minimum Confidence",
+                "description": "Minimum OCR confidence (0.0-1.0) to emit a plate_recognized event",
+                "defaultValue": 0.95
+            }
+        ],
+        "Events": [
+            {
+                "ID": "anpr.plate_recognized",
+                "Name": "License plate recognized"
+            }
+        ]
+    }
+]
