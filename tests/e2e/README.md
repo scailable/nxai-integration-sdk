@@ -36,12 +36,12 @@ No case is gated by platform. Windows registers the same cases: the Python SDK's
 layer branches per platform, the SHM growth in `_ipc_send_response` included.
 
 **On Windows, verify with the checked-in entry point — `verify-windows.cmd` in the repo
-root.** It enters the MSVC developer environment itself (so start it from any shell),
-configures, builds only the C++ targets the suite uses, runs CTest and exits non-zero on
-any failing case:
+root.** It builds only the C++ targets the suite uses with `build-windows.cmd`, which enters
+the MSVC developer environment itself (so start it from any shell), runs CTest in
+`build-windows` and exits non-zero on any failing case:
 
 ```
-.\verify-windows.cmd [build-dir]      # default build dir: build-windows
+.\verify-windows.cmd
 ```
 
 Do not run a bare `cmake --build` there: it would also package every Python processor

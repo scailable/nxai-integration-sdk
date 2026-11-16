@@ -19,16 +19,17 @@ The entire SDK is organized around one pattern: per-processor directories at the
 - **`example_models/`** — ONNX models used by the advanced examples.
 - **`CMakeLists.txt`** — Root build file. Add a new processor by appending one line here and creating the processor's own directory.
 - **`build_all.sh`** / **`build_docker.sh`** — Convenience wrappers around the CMake invocation.
-- **`.claude/docs/`** — Reference documentation for the wire protocol and JSON config, describing v5 and current:
+- **`.claude/docs/`** — Reference documentation for the wire protocol, the JSON config and the processor shape, describing v5 and current:
   - `external_postprocessors_json.md` — every field of the JSON registration file.
   - `input_from_ai_manager.md` — every field the processor receives, including the shared-memory IPC transport and the `--port` dev-mode fallback.
   - `output_to_ai_manager.md` — every field the processor can return, including the `Objects`/`Events` response shape and the event-id rule.
+  - `writing_a_processor.md` — the target shape of a Python processor: template table, names, main script, registration JSON, CMake, README and tests.
 
   Where they disagree with `nxai-utilities/nxai_postprocessor_sdk.py` or a migrated example's `external_postprocessors.json`, the code wins.
 
 ## Canonical workflow
 
-Build a single processor:
+On a fresh machine or clone, `/setup` checks the toolchain, finds the VMS and creates the registration files. Build a single processor:
 
 ```shell
 mkdir -p build && cd build
@@ -53,12 +54,15 @@ Each example ships its own `external_postprocessors.json` next to its source —
 
 ## Verifying on Windows
 
-`verify-windows.cmd` in the repo root is the entry point for Windows work: it enters the MSVC
-developer environment itself, configures, builds the C++ targets and runs the `ctest` suite,
-exiting non-zero on any failing case. Start it from any shell — do not wrap it in `vcvars`,
-and do not substitute a bare `cmake --build`, which packages every Python processor with
-Nuitka for nothing. The C++ scenarios, the launcher's own tests and the Python scenarios all
-run, and every enabled case must pass. `e2e-python-preproc-image-realloc-multi` is
+`verify-windows.cmd` in the repo root is the entry point for Windows verification: it builds
+the C++ targets with `build-windows.cmd` and runs the `ctest` suite, exiting non-zero on any
+failing case. `build-windows.cmd [target ...]` is the entry point for a Windows build: it
+enters the MSVC developer environment itself, configures `build-windows/` when it has no
+CMake cache, and builds the named targets (none: configure only). Start either from any
+shell — do not wrap them in `vcvars`, and do not substitute a bare `cmake --build`, which
+packages every Python processor with Nuitka for nothing. The C++ scenarios, the launcher's
+own tests and the Python scenarios all run, and every enabled case must pass.
+`e2e-python-preproc-image-realloc-multi` is
 `DISABLED`: it sends three 4K frames back to back, the first reply grows the output
 channel, and the harness does not acknowledge that reallocation in time, so frame 1's send
 times out and frame 2's is refused with `IPC_ERROR_BUSY`. A sender must not write over an

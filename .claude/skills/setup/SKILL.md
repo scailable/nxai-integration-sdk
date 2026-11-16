@@ -1,3 +1,9 @@
+---
+name: setup
+description: Set up the SDK development environment on a fresh machine or a fresh clone.
+disable-model-invocation: true
+---
+
 Set up the development environment for the NX AI Integration SDK from scratch. Run this once on a fresh machine or after cloning the repo.
 
 ## Steps
@@ -104,7 +110,7 @@ sudo apt install cmake g++ python3-pip python3-venv patchelf
 
 ### 4. Configure the build directory
 
-**Windows:** the build directory is `build-windows/`, and `verify-windows.cmd` in the repo root configures it. The script enters the MSVC developer environment itself. Run it by absolute path from any shell; do not wrap it in `vcvars`:
+**Windows:** the build directory is `build-windows/`, and `verify-windows.cmd` in the repo root configures it. The script enters the MSVC developer environment itself. Run it by absolute path from PowerShell (in Git Bash write `cmd //c`, because `cmd /c` does nothing and exits 0); do not wrap it in `vcvars`:
 ```shell
 cmd /c <repo root>\verify-windows.cmd
 ```
@@ -197,7 +203,7 @@ Print the warning variant (⚠️) instead of ✅ for each line whose step faile
 
 You're set up. Typical next steps:
 
-  /new-processor <name> [type]     — scaffold a new post-processor
+  /new-processor [description]     — design and build a new processor
   /register-processor <name>       — generate its JSON registration entry
   /install-processor <name>        — build and install it
   /check-registration              — verify JSON matches source code

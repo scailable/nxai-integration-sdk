@@ -1,3 +1,8 @@
+---
+name: fact-check
+description: Check that CLAUDE.md still matches the repository, and propose fixes. Use after adding, removing or renaming a processor, a doc or a top-level path that CLAUDE.md names.
+---
+
 Verify that CLAUDE.md accurately describes the current state of the repository. Report any discrepancies and offer to fix them.
 
 ## Steps
@@ -17,7 +22,7 @@ Verify that CLAUDE.md accurately describes the current state of the repository. 
 
 6. **"Picking an example" mappings** — for every directory name listed in the "Picking an example to copy" section of CLAUDE.md, confirm the directory exists.
 
-7. **Install paths** — verify the Linux install paths stated in CLAUDE.md match the `INSTALL_DEST_POSTPROCESSORS` and `INSTALL_DEST_PREPROCESSORS` default values in root `CMakeLists.txt`.
+7. **Install paths** — CLAUDE.md writes install paths relative to `VMS_BASE` and gives `VMS_BASE` per product in a table, with a separate Windows paragraph. For each product (NX Meta, NX Witness) on each OS (Linux, Windows), substitute `VMS_BASE` into the post- and preprocessor paths. Compare the results with the `INSTALL_DEST_POSTPROCESSORS` and `INSTALL_DEST_PREPROCESSORS` defaults that root `CMakeLists.txt` builds from its `_NX_BASE` candidates on the same OS. Where CLAUDE.md names the product that CMake falls back to when it detects none, compare that with the `else()` branch too.
 
 8. **Print** a full checklist:
    ```

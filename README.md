@@ -11,7 +11,7 @@ Instructions that differ between Linux and Windows are in collapsible sections. 
 
 ## The AI Manager
 
-The examples need the AI Manager v5 plugin in the NX VMS. The public v4 engine does not run them. A v4 engine starts a processor from this repository, but the processor does not signal that it is ready, and the AI Manager drops it. If you have a v4 processor, the `/migrate-to-v5` command in `.claude/commands/` gives the steps to port it to v5.
+The examples need the AI Manager v5 plugin in the NX VMS. The public v4 engine does not run them. A v4 engine starts a processor from this repository, but the processor does not signal that it is ready, and the AI Manager drops it. If you have a v4 processor, the `/migrate-to-v5` skill in `.claude/skills/migrate-to-v5/` gives the steps to port it to v5.
 
 ## Download the integration SDK
 
@@ -138,10 +138,16 @@ It is possible to build only specific examples, refer to the readme files in the
 
 ### Run the test suite on Windows
 
-`verify-windows.cmd` in the repository root is the entry point. It enters the MSVC environment itself, configures, builds the C++ targets and runs the `ctest` suite. It builds only the C++ targets and does not package the Python processors. You can start it from any shell:
+`verify-windows.cmd` in the repository root is the entry point. It builds the C++ targets with `build-windows.cmd` and runs the `ctest` suite. It does not package the Python processors. You can start it from any shell:
 
 ```bat
 verify-windows.cmd
+```
+
+To build one target, use `build-windows.cmd`. It enters the MSVC environment itself, configures `build-windows` if it has no CMake cache, and builds the targets that you give. With no target, it only configures:
+
+```bat
+build-windows.cmd <target-name>
 ```
 
 ## Install the pre/postprocessors

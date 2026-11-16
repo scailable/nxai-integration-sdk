@@ -1,8 +1,14 @@
+---
+name: register-processor
+description: Write the registration JSON entry for an existing postprocessor from its source code. Use when a postprocessor has no entry in its external_postprocessors.json.
+argument-hint: "<processor name>"
+---
+
 Generate the `external_postprocessors.json` registration entry for an existing post-processor by inspecting its source code.
 
 ## Arguments
 
-`$ARGUMENTS` — short name (e.g. `vehicle-counter`) or full directory name (e.g. `postprocessor-python-vehicle-counter`).
+The processor name is the text after the skill name, or the processor the request names. If neither gives one, ask. It is a short name (e.g. `vehicle-counter`) or a full directory name (e.g. `postprocessor-python-vehicle-counter`).
 
 ## Steps
 
@@ -28,12 +34,7 @@ Generate the `external_postprocessors.json` registration entry for an existing p
 
 4. **Generate** the JSON element. `Schedule` and `LogFilepath` are always included; boolean flags default to `false` and are omitted when `false`; empty arrays are omitted.
 
-   Derive the names from the directory name found in step 1, the same way `/new-processor` step 9 does:
-
-   - `<processor-dir>` is the directory name, e.g. `postprocessor-python-anpr-example`.
-   - `<name>` is `<processor-dir>` with a leading `postprocessor-python-` removed (e.g. `anpr-example`). If the directory does not start with that prefix, remove a leading `postprocessor-` instead. Keep the case and the hyphens.
-   - `Name` is `<processor-dir>`.
-   - `LogFilepath` is `/tmp/postprocess.<name>.stdout.log`.
+   `<processor-dir>` is the directory found in step 1. Derive `<name>`, `Name` and `LogFilepath` from it by the rules in `.claude/docs/writing_a_processor.md`, section "Names". Use the Linux `LogFilepath`.
 
    ```json
    {

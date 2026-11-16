@@ -1,8 +1,14 @@
+---
+name: check-registration
+description: Audit a processor's registration JSON against its source code. Use when a box, event or setting is missing in the VMS UI, or after changing what a processor emits or reads.
+argument-hint: "[processor name]"
+---
+
 Audit that `external_postprocessors.json` and `external_preprocessors.json` declarations are consistent with what each processor's source code actually does.
 
 ## Arguments
 
-`$ARGUMENTS` — (optional) short or full processor name. If omitted, all registered post- and preprocessors are checked.
+The processor name is the text after the skill name, or the processor the request names: a short or full processor name. It is optional. If none is given, all registered post- and preprocessors are checked.
 
 ## Steps
 
@@ -28,7 +34,9 @@ Audit that `external_postprocessors.json` and `external_preprocessors.json` decl
    On Windows these are `<VMS_BASE>\nx_ai_manager\postprocessors\external_postprocessors.json` and `<VMS_BASE>\nx_ai_manager\preprocessors\external_preprocessors.json`.
    For each kind with no installed file, use the files in the repo instead: every `postprocessor-*/external_postprocessors.json` and every `preprocessor-*/external_preprocessors.json`. Treat their arrays as one list. These colocated files are templates. Report if no file is found.
 
-3. **Parse** the JSON. Each file is a bare array of entries. If a name argument was given, keep only the entries whose `Command` basename or processor directory matches it (with the prefix rule of `/install-processor`).
+3. **Parse** the JSON. If a file does not parse, report one line `❌ <file>: does not parse: <parser error>` and stop: no row can be judged. Each file is a bare array of entries. If a name argument was given, keep only the entries whose `Command` basename or processor directory matches it (with the prefix rule of `/install-processor`).
+
+   If a name was given and the installed files have no matching entry, the processor is not installed yet. Find its directory with the same prefix rule and use its colocated `external_postprocessors.json` or `external_preprocessors.json` instead. Say in the report that the processor is not installed and that the check used the colocated file.
 
 4. **For each entry**, locate its source directory in the repo. Match the basename of `Command` (split on `/` and `\`, without `.exe`) to a `postprocessor-*/` or `preprocessor-*/` directory. `Name` is a display name and often differs from the directory, so do not match on it. In a colocated file the directory is the one that holds the file. Read its `.py` / `.cpp` source and run the checks in step 5.
 
@@ -36,10 +44,10 @@ Audit that `external_postprocessors.json` and `external_preprocessors.json` decl
 
    | Check | Detect in code | Compare against JSON |
    |-------|---------------|---------------------|
-   | **Events** | `EventMetadata()` / `EventData` with `type_id = "id"`, appended to `msg.events`; the first argument of `add_event(` | IDs in code vs `"Events"[].ID` — must match verbatim, no `nx.nxai.` prefix on either side |
+   | **Events** | `EventMetadata()` / `EventData` with `type_id = "id"`, appended to `msg.events`; the first argument of `add_event(`. The ID is often a module constant, resolve it to its literal. | IDs in code vs `"Events"[].ID` — must match verbatim, no `nx.nxai.` prefix on either side |
    | **Objects** | `msg.objects["id"]` assignments (`msg.objects[CLASS] = [...]`, `setdefault`, `emplace`) — the key is often a module constant, resolve it to its literal. In a C++ TENSOR processor, the class is also encoded in a tensor name such as `"bboxes-format:xyxysc;0:<class>"`: the text after the last `:` is a new class. | Class names in code vs `"Objects"[].ID` |
    | **UserSettings** | `msg.user_settings.get("key")` / `msg.user_settings["key"]`; the same reads on `message.user_settings` or on a function parameter named `user_settings` that receives it; f-string keys such as `f"prompt{index}"` | Keys in code vs `"UserSettings"[].name`. A Repeater entry has a `template` whose `name` has a `#` (for example `prompt#`); it covers the keys `prompt1`, `prompt2`, ... so match `prompt{i}` to it. |
-   | **Schedule** | which parse the loop calls: `parse_objects_message`, `ObjectsPostProcessorMessage.from_dict`, a `create_*_from_bytes` factory that builds an objects message, or C++ `parseObjectsPostProcessorMessage` → `OBJECTS`; `parse_tensor_message` or C++ `parseTensorMessage` → `TENSOR`; `parse_image_message` → `IMAGE` (preprocessors only) | Matches `"Schedule"`; also flag `ReceiveInputImage` on a `TENSOR` schedule — that message never carries `ImageData` |
+   | **Schedule** | which parse the loop calls: `parse_objects_message`, `ObjectsPostProcessorMessage.from_dict`, a `create_*_from_bytes` factory that builds an objects message, or C++ `parseObjectsPostProcessorMessage` → `OBJECTS`; `parse_tensor_message` or C++ `parseTensorMessage` → `TENSOR`; `parse_image_message` or C++ `parseImagePreprocessorMessage` → `IMAGE` (preprocessors only) | Matches `"Schedule"`; also flag `ReceiveInputImage` on a `TENSOR` schedule — that message never carries `ImageData` |
    | **ReceiveBinaryData** | any of: `msg.tensors` referenced; the raw `"Tensors"` key read off the unpacked msgpack dict; the message parsed by a `message_processing_utils` factory (`create_anpr_message_from_bytes`, `create_speed_message_from_bytes`), which reads `Tensors` in `parse_typed_message` | Code usage matches JSON flag. A `TENSOR` schedule always carries tensors, so the flag is not required there: do not report "in code, not declared" for it. |
    | **ReceiveInputImage** | `msg.image_data` referenced | Code usage matches JSON flag |
    | **Command path** | — | If `Command` is present, the file exists and is executable. On Windows the path ends in `.exe`, uses `/` or `\`, and the file only has to exist (`Test-Path -LiteralPath`). Skip this check for entries from colocated template files: their `Command` is a placeholder. |
