@@ -1,8 +1,14 @@
+---
+name: logs
+description: Show an installed processor's log and the AI Manager's lines about it. Use when a processor does not start, stops, or its results do not reach the VMS.
+argument-hint: "<processor name>"
+---
+
 Find and display the log file for a processor.
 
 ## Arguments
 
-`$ARGUMENTS` — a short name (e.g. `events-example`) or a full directory name (e.g. `postprocessor-python-events-example` or `preprocessor-python-image-example`). If the argument starts with neither `postprocessor-` nor `preprocessor-`, prepend `postprocessor-python-`. The C++ and cloud examples (`postprocessor-cpp-*`, `postprocessor-cloud-*`) need the full directory name.
+The processor name is the text after the skill name, or the processor the request names. If neither gives one, ask. It is a short name (e.g. `events-example`) or a full directory name (e.g. `postprocessor-python-events-example` or `preprocessor-python-image-example`). If the argument starts with neither `postprocessor-` nor `preprocessor-`, prepend `postprocessor-python-`. The C++ and cloud examples (`postprocessor-cpp-*`, `postprocessor-cloud-*`) need the full directory name.
 
 ## Background
 
@@ -39,7 +45,7 @@ The entry is in `external_postprocessors.json` (postprocessors) or `external_pre
    ⚠️  The entry for <Name> has no LogFilepath. The processor's stdout and stderr are lost.
        Add "LogFilepath": "/tmp/<postprocess|preprocess>.<short name>.stdout.log" to the entry and restart the AI Manager.
    ```
-   On Windows, suggest `C:\Windows\Temp\<postprocess|preprocess>.<short name>.stdout.log`, because the service runs as LocalSystem and `/tmp` does not exist. Then go to step 6.
+   On Windows, suggest `"C:\\Windows\\Temp\\<postprocess|preprocess>.<short name>.stdout.log"` (backslashes doubled, as the JSON file needs them), because the service runs as LocalSystem and `/tmp` does not exist. Then go to step 6.
 
 5. **If `LogFilepath` is set**, show the last 50 lines of that file:
    ```shell

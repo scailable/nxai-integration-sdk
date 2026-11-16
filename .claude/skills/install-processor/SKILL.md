@@ -1,8 +1,15 @@
+---
+name: install-processor
+description: Build and install a processor into the local NX VMS, then offer a service restart.
+argument-hint: "<processor name>"
+disable-model-invocation: true
+---
+
 Build and install a named post-processor or preprocessor using the project's CMake workflow.
 
 ## Arguments
 
-`$ARGUMENTS` — a short name (e.g. `events-example`) or a full CMake target name (e.g. `postprocessor-python-events-example` or `preprocessor-python-image-example`). If the argument starts with neither `postprocessor-` nor `preprocessor-`, prepend `postprocessor-python-`. The C++ and cloud examples (`postprocessor-cpp-*`, `postprocessor-cloud-*`) need the full directory name.
+The processor name is the text after the skill name, or the processor the request names. If neither gives one, ask. It is a short name (e.g. `events-example`) or a full CMake target name (e.g. `postprocessor-python-events-example` or `preprocessor-python-image-example`). If the argument starts with neither `postprocessor-` nor `preprocessor-`, prepend `postprocessor-python-`. The C++ and cloud examples (`postprocessor-cpp-*`, `postprocessor-cloud-*`) need the full directory name.
 
 ## Steps
 
@@ -26,7 +33,7 @@ Build and install a named post-processor or preprocessor using the project's CMa
 
 2. **Determine the CMake target name and the kind.** If the argument starts with `postprocessor-` or `preprocessor-`, use it as is. Otherwise prepend `postprocessor-python-`. The prefix gives the kind: `postprocessor-` is a postprocessor, `preprocessor-` is a preprocessor. Verify the source directory exists; stop with an error if not.
 
-3. **Check the build directory.** On Windows the build directory is `build-windows/`. If `build-windows/CMakeCache.txt` is missing, configure it with `cmd /c <repo root>\verify-windows.cmd` (by absolute path, from any shell; it enters the MSVC developer environment itself). It also builds the C++ targets and runs the `ctest` suite, and prints `verify-windows: PASS` on success. CLAUDE.md ("Verifying on Windows") says every enabled case must pass; `e2e-python-preproc-image-realloc-multi` is `DISABLED` and does not run. Stop on any failing case. On Linux: if `build/` does not exist at the repo root, or `build/CMakeCache.txt` is missing, run the full configure step first:
+3. **Check the build directory.** On Windows the build directory is `build-windows/`, and `build-windows.cmd` in step 4 configures it when `build-windows/CMakeCache.txt` is missing. On Linux: if `build/` does not exist at the repo root, or `build/CMakeCache.txt` is missing, run the full configure step first:
    ```shell
    mkdir -p build
    cd build
@@ -34,12 +41,13 @@ Build and install a named post-processor or preprocessor using the project's CMa
    source integrationsdk/bin/activate
    cmake ..
    ```
+   If the configure fails because a tool is missing (`cmake`, a C++ compiler, `python3-venv`, the MSVC toolset; on Windows `build-windows.cmd` exits 2), stop and tell the user to run `/setup`. It checks the toolchain and, on Linux, installs what is missing.
 
-4. **Build** the target. On Windows, `postprocessor-cpp-objects-example` and `postprocessor-cpp-tensors-example` are already built by `verify-windows.cmd`. Build any other target inside the MSVC developer environment, and always with `--target`: a bare `cmake --build` packages every Python processor with Nuitka.
+4. **Build** the target. On Windows, run `build-windows.cmd` by absolute path, from PowerShell or Git Bash. It enters the MSVC developer environment itself, configures `build-windows/` if needed, and builds only the named target:
    ```shell
-   cmd /c ""<VS_PATH>\VC\Auxiliary\Build\vcvars64.bat" && cmake --build <repo root>\build-windows --target <target-name>"
+   cmd /c <repo root>\build-windows.cmd <target-name>
    ```
-   `<VS_PATH>` is the output of `vswhere.exe -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`, with `vswhere.exe` in `%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\`.
+   In Git Bash write `cmd //c`: Git Bash rewrites `/c` as a path, so `cmd /c` builds nothing and exits 0. Check that the target binary exists after the build.
 
    On Linux:
    ```shell
@@ -69,4 +77,4 @@ Build and install a named post-processor or preprocessor using the project's CMa
    sudo service <VMS_SERVICE> restart
    ```
 
-8. **Print** the installed binary path and the registration entry's `Name`. The entry is in `<processor-dir>/external_<postprocessors|preprocessors>.json`, next to the source. Tell the user to set its `Command` placeholder to the installed binary path (on Windows, the `.exe` in the install directory, for example `<VMS_BASE>\nx_ai_manager\postprocessors\<target-name>.exe`) and to add the entry to the installed `external_<postprocessors|preprocessors>.json` in the install directory.
+8. **Print** the installed binary path and the registration entry's `Name`. The entry is in `<processor-dir>/external_<postprocessors|preprocessors>.json`, next to the source. Tell the user to set its `Command` placeholder to the installed binary path (on Windows, the `.exe` in the install directory, for example `<VMS_BASE>\nx_ai_manager\postprocessors\<target-name>.exe`) and to add the entry to the installed `external_<postprocessors|preprocessors>.json` in the install directory. If that installed file does not exist, tell the user to run `/setup`, which creates it as an empty array.

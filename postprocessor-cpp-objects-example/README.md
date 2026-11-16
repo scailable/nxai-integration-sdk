@@ -59,9 +59,9 @@ cmake --build . --target postprocessor-cpp-objects-example
 cmake --install . --component postprocessor-cpp-objects-example
 ```
 
-On Windows, run `verify-windows.cmd` in the repository root. It builds the
-C++ targets and runs the `ctest` suite. The example has no unit tests of its
-own.
+On Windows, run `build-windows.cmd postprocessor-cpp-objects-example` in the
+repository root to build the example. `verify-windows.cmd` builds the C++
+targets and runs the `ctest` suite. The example has no unit tests of its own.
 
 ## Licence
 
