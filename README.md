@@ -389,4 +389,4 @@ In the normal (`Command`) mode the AI Manager launches the processor with two sh
 
 # Licence
 
-Copyright 2026, Network Optix, All rights reserved.
+Copyright 2026, Network Optix. Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).

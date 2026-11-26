@@ -1,0 +1,10 @@
+NX AI Integration SDK
+Copyright 2026, Network Optix
+
+This product is licensed under the Apache License, Version 2.0. See the LICENSE file.
+
+Third-party components
+
+nxai-utilities/mpack.h
+    MPack, Copyright (c) 2015-2021 Nicholas Fraser and the MPack authors.
+    Licensed under the MIT License. The licence text is in the file header.

@@ -92,4 +92,4 @@ PYTHONPATH=../nxai-utilities python -m unittest test_preprocessor_python_tensor_
 
 ## Licence
 
-Copyright 2026, Network Optix, All rights reserved.
+Copyright 2026, Network Optix. Licensed under the Apache License, Version 2.0. See [LICENSE](../LICENSE).
