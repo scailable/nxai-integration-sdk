@@ -150,4 +150,4 @@ deployments, put it behind a reverse proxy with authentication and HTTPS.
 
 ## Licence
 
-Copyright 2026, Network Optix, All rights reserved.
+Copyright 2026, Network Optix. Licensed under the Apache License, Version 2.0. See [LICENSE](../LICENSE).

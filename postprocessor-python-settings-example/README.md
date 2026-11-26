@@ -92,4 +92,4 @@ python -m unittest test_postprocessor_python_settings_example
 
 ## Licence
 
-Copyright 2026, Network Optix, All rights reserved.
+Copyright 2026, Network Optix. Licensed under the Apache License, Version 2.0. See [LICENSE](../LICENSE).
